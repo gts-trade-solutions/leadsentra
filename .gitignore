@@ -24,9 +24,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# local env files
+# env files with real secrets — NEVER commit
 .env
 .env*.local
+.env.production
+.env.development
+.env.staging
+# the .example file IS allowed to be committed (template, no real secrets)
+!.env.production.example
 
 # vercel
 .vercel

@@ -212,9 +212,12 @@ export async function POST(
       failed++;
       const msg = e?.message ?? String(e);
       errors.push({ id: r.id, email: r.email, error: msg });
+      // Persist the actual error so the tracking page can show users WHY a
+      // send failed (auth issue, mailbox rejected, SES throttled, etc.).
+      // Truncated to 500 chars to match the column width.
       await db.execute(
-        "UPDATE campaign_recipients SET status='failed', last_event_at = NOW() WHERE id = ?",
-        [r.id]
+        "UPDATE campaign_recipients SET status='failed', error_reason=?, last_event_at = NOW() WHERE id = ?",
+        [String(msg).slice(0, 500), r.id]
       );
     }
   }

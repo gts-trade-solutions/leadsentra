@@ -59,7 +59,9 @@
       "Bash(node -e ' *)",
       "Bash(node scripts/seed-suppressions.mjs evanjalineraceinnovations@gmail.com)",
       "Bash(node scripts/seed-suppressions.mjs)",
-      "Bash(node scripts/apply-sql.mjs migrations/2026-05-15_suppressions_corrected.sql)"
+      "Bash(node scripts/apply-sql.mjs migrations/2026-05-15_suppressions_corrected.sql)",
+      "Bash(grep -oE \"[A-Z][A-Z0-9_]+$\")",
+      "Bash(node scripts/apply-sql.mjs migrations/2026-05-16_recipient_error_reason.sql)"
     ],
     "additionalDirectories": [
       "d:\\leadiq-master\\leadiq-master\\app\\api\\campaigns\\[id]",

@@ -28,6 +28,8 @@ type Row = {
   contact_name: string | null;
   email: string;
   status: string;
+  /** Per-recipient failure reason persisted by the send route on status='failed'. */
+  error_reason: string | null;
   message_id: string | null;
   sent_at: string | null;
   opened_at: string | null;
@@ -463,7 +465,20 @@ export default function Tracking() {
                         <span className="text-gray-500 text-xs">{r.email}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={r.status} />
+                      {/* Per-recipient failure reason — only persisted on
+                          status='failed'.  Truncated with title so the user
+                          can hover to read the full SES/provider error. */}
+                      {r.status === "failed" && r.error_reason && (
+                        <div
+                          className="mt-1 text-[11px] text-rose-300/90 max-w-[200px] truncate"
+                          title={r.error_reason}
+                        >
+                          {r.error_reason}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-gray-400 text-xs">{fmtDate(r.sent_at)}</td>
                     <td className="px-3 py-2">
                       {r.opens_count > 0 ? (

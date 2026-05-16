@@ -62,7 +62,7 @@ export async function GET(req: Request) {
   // Paged rows
   const [rows] = await db.query(
     `SELECT
-        cr.id, cr.campaign_id, cr.contact_id, cr.email, cr.status,
+        cr.id, cr.campaign_id, cr.contact_id, cr.email, cr.status, cr.error_reason,
         cr.message_id, cr.created_at AS sent_at,
         cr.opened_at, cr.clicked_at, cr.last_event_at,
         cr.bounced_at, cr.complaint_at,

@@ -68,8 +68,33 @@ export function resolveProvider(): Provider {
 export async function sendEmail(args: SendArgs): Promise<{ id: string | null }> {
   logDeliverabilityWarnings(args);
   const provider = resolveProvider();
-  if (provider === "resend") return sendWithResend(args);
-  if (provider === "ses") return sendWithSES(args);
+
+  // Provider-specific credential pre-checks.  Throw a CLEAR error rather than
+  // letting the SDK throw a cryptic auth error mid-batch.  The send route's
+  // catch block records `error_reason` per recipient so the tracking page can
+  // show what went wrong, not silently mark them 'delivered'.
+  if (provider === "ses") {
+    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+      throw new Error(
+        "EMAIL_PROVIDER is 'ses' but AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are missing. " +
+        "Set them in your production environment (.env.production or PM2 ecosystem) and " +
+        "restart with `pm2 restart leadsentra --update-env`."
+      );
+    }
+    return sendWithSES(args);
+  }
+  if (provider === "resend") {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error(
+        "EMAIL_PROVIDER is 'resend' but RESEND_API_KEY is missing.  Add it to your environment."
+      );
+    }
+    return sendWithResend(args);
+  }
+  // "dev" path — only acceptable when actually in development.  In production
+  // the silent fake-success is what caused your [DEV email] confusion; better
+  // to throw and fail the send loudly so the campaign tracking shows the real
+  // reason ("No email provider configured") next to each failed recipient.
   return sendWithDev(args);
 }
 
@@ -270,15 +295,35 @@ async function sendWithResend({ to, subject, html, fromEmail, fromName, text, un
 }
 
 // ---------- Dev fallback ----------
-// Used when no provider creds are present.  Pretends the send succeeded so
-// the rest of the flow (campaign status, delivered counter, tracking) works
-// end-to-end on a fresh machine.
+//
+// In LOCAL DEVELOPMENT (NODE_ENV != "production") we let sends "succeed" with
+// a console log + fake message id so the rest of the flow (campaign status,
+// tracking page, suppression checks) works without real provider creds.
+//
+// In PRODUCTION we THROW — silent fake-success would mark campaign_recipients
+// as 'delivered' while no email was actually sent, which is worse than a loud
+// failure.  The error message tells the operator exactly what to fix.
 async function sendWithDev({ to, subject, fromEmail }: SendArgs) {
+  const reason =
+    "No email provider configured.  Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (SES) " +
+    "or RESEND_API_KEY (Resend) in your environment, then restart: " +
+    "`pm2 restart leadsentra --update-env`.";
+
+  if (process.env.NODE_ENV === "production") {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[email-provider] BLOCKED send (production has no provider creds).\n` +
+      `  from=${fromEmail}  to=${to}  subject="${subject}"\n` +
+      `  ${reason}`
+    );
+    throw new Error(reason);
+  }
+
+  // Development convenience path.
   // eslint-disable-next-line no-console
   console.log(
-    `[DEV email] FROM ${fromEmail}  TO ${to}\n          Subject: ${subject}\n          (Set RESEND_API_KEY or AWS_ACCESS_KEY_ID in .env.local to actually send.)`
+    `[DEV email] FROM ${fromEmail}  TO ${to}\n          Subject: ${subject}\n          (${reason})`
   );
-  // Fake ID so message_id is populated and webhooks can match by it later.
   const fakeId = `dev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   return { id: fakeId };
 }
