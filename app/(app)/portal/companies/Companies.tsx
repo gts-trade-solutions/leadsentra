@@ -743,10 +743,10 @@ export default function CompaniesPage() {
     contacts: (
       <button
         onClick={() => openContactsModal(r.company_id)}
-        className="inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs"
+        className="inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs"
         title="View unlocked contacts"
       >
-        View <span className="text-gray-300">({r.contacts})</span>
+        View ({r.contacts})
       </button>
     ),
     Actions: (
