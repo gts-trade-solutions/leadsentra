@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(node -e \"console.log\\(require\\('exceljs/package.json'\\).version\\)\")"
     ]
   }
 }

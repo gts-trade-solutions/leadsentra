@@ -761,13 +761,35 @@ export default function CompaniesPage() {
   }));
 
   // admin: template CSV (now with new columns)
-  function downloadCompaniesTemplateCsv() {
+  async function downloadCompaniesTemplateCsv() {
+    // Server-generated .xlsx so the `segment` column has a real Excel
+    // data-validation dropdown bound to the live company_segments list.
+    // Falls back to a basic CSV if the endpoint isn't reachable (e.g. older
+    // build) so the Template button never appears broken.
+    try {
+      const res = await fetch("/api/companies/template", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "companies_template.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    } catch {
+      // fall through to CSV
+    }
     const cols = [
       "company_id",
       "company_name",
       "legal_name",
       "trading_name",
       "company_type",
+      "segment",
       "size",
       "head_office_address",
       "city_regency",
@@ -778,7 +800,6 @@ export default function CompaniesPage() {
       "email_general",
       "linkedin",
       "notes",
-      // NEW columns
       "company_profile",
       "financial_reports",
       "forecast_value",
@@ -937,6 +958,11 @@ export default function CompaniesPage() {
             <button
               onClick={downloadCompaniesTemplateCsv}
               className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium transition-colors"
+              title={
+                segmentOptions.length
+                  ? `Download CSV template.\nValid segment values: ${segmentOptions.join(", ")}`
+                  : "Download CSV template. Add segments in the filter bar before importing."
+              }
             >
               Template
             </button>
@@ -952,7 +978,9 @@ export default function CompaniesPage() {
             <input
               ref={fileRef}
               type="file"
-              accept=".csv"
+              // The downloaded template is .xlsx (with the segment dropdown);
+              // CSV is still accepted for backwards-compatible imports.
+              accept=".csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               onChange={onFileChange}
             />

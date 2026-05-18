@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import Papa from "papaparse";
+import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
@@ -10,12 +11,81 @@ export const runtime = "nodejs";
 
 type RowError = { row: number; error: string };
 
+/**
+ * Parse the uploaded file into a uniform { headers, rows } shape regardless
+ * of whether it arrived as a CSV or as the .xlsx template we now generate.
+ * Detection is by filename extension first (cheap, reliable), then MIME type.
+ */
+async function readSheet(
+  file: File
+): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
+  const name = (file.name || "").toLowerCase();
+  const looksXlsx =
+    name.endsWith(".xlsx") ||
+    file.type ===
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+  if (looksXlsx) {
+    const buf = Buffer.from(await file.arrayBuffer());
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    // Use the first non-hidden sheet — the template's "Lists" sheet is
+    // veryHidden, so this picks "Companies" automatically.
+    const ws =
+      wb.worksheets.find((s) => s.state !== "hidden" && s.state !== "veryHidden") ||
+      wb.worksheets[0];
+    if (!ws) return { headers: [], rows: [] };
+
+    const headerRow = ws.getRow(1);
+    const headers: string[] = [];
+    headerRow.eachCell({ includeEmpty: false }, (cell, col) => {
+      headers[col - 1] = String(cell.value ?? "").trim().toLowerCase();
+    });
+
+    const rows: Record<string, string>[] = [];
+    ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const obj: Record<string, string> = {};
+      row.eachCell({ includeEmpty: false }, (cell, col) => {
+        const key = headers[col - 1];
+        if (!key) return;
+        // Hyperlinks come through as { text, hyperlink } — keep the visible text.
+        const v: any = cell.value;
+        let str: string;
+        if (v && typeof v === "object" && "text" in v) {
+          str = String((v as any).text ?? "");
+        } else if (v instanceof Date) {
+          str = v.toISOString();
+        } else {
+          str = String(v ?? "");
+        }
+        obj[key] = str.trim();
+      });
+      // Skip rows that ended up entirely blank (Excel often pads).
+      if (Object.values(obj).some((x) => x !== "")) rows.push(obj);
+    });
+    return { headers, rows };
+  }
+
+  const text = await file.text();
+  const parsed = Papa.parse<Record<string, string>>(text, {
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: (h) => h.trim().toLowerCase(),
+  });
+  if (parsed.errors.length) {
+    throw new Error(parsed.errors.slice(0, 5).map((e) => e.message).join("; "));
+  }
+  return { headers: parsed.meta.fields ?? [], rows: parsed.data };
+}
+
 // Header aliases — accept whatever the user's CSV uses.  Maps any of these
 // headers to a single canonical key.  Case-insensitive (we lower-case headers).
 const HEADER_ALIASES: Record<string, string[]> = {
   code:                ["code", "company_id", "id"],
   name:                ["name", "company_name", "company"],
   type:                ["type", "company_type", "industry"],
+  segment:             ["segment"],
   size:                ["size", "employees", "employee_count"],
   website:             ["website", "url", "domain"],
   linkedin:            ["linkedin", "linkedin_url"],
@@ -60,25 +130,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "File too large (max 5MB)" }, { status: 413 });
   }
 
-  const text = await file.text();
-  const parsed = Papa.parse<Record<string, string>>(text, {
-    header: true,
-    skipEmptyLines: true,
-    transformHeader: (h) => h.trim().toLowerCase(),
-  });
-
-  if (parsed.errors.length) {
+  let sheet: { headers: string[]; rows: Record<string, string>[] };
+  try {
+    sheet = await readSheet(file);
+  } catch (e: any) {
     return NextResponse.json(
-      {
-        error: "CSV parse error",
-        detail: parsed.errors.slice(0, 5).map((e) => e.message),
-      },
+      { error: "Parse error", detail: e?.message || "Could not read file" },
       { status: 400 }
     );
   }
 
   const aliasLookup = buildAliasLookup();
-  const rawHeaders = parsed.meta.fields ?? [];
+  const rawHeaders = sheet.headers;
   const headerMap: Record<string, string> = {};
   for (const h of rawHeaders) {
     const canonical = aliasLookup[h];
@@ -106,8 +169,8 @@ export async function POST(req: Request) {
   try {
     await conn.beginTransaction();
 
-    for (let i = 0; i < parsed.data.length; i++) {
-      const raw = parsed.data[i];
+    for (let i = 0; i < sheet.rows.length; i++) {
+      const raw = sheet.rows[i];
       const row: Record<string, string | null> = {};
 
       // Translate raw headers → canonical keys
@@ -132,16 +195,17 @@ export async function POST(req: Request) {
       try {
         await conn.execute(
           `INSERT INTO companies
-             (company_id, user_id, company_name, industry, size, website, linkedin, country,
+             (company_id, user_id, company_name, industry, segment, size, website, linkedin, country,
               legal_name, trading_name, company_type, head_office_address, city_regency,
               postal_code, phone_main, email_general, notes, company_profile,
               financial_reports, forecast_value)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             company_id,
             session.id,
             name,
             row.type ?? null,
+            row.segment ?? null,
             row.size ?? null,
             row.website ?? null,
             row.linkedin ?? null,
@@ -183,6 +247,6 @@ export async function POST(req: Request) {
     inserted,
     failed,
     errors: errors.slice(0, 50),
-    parsed: parsed.data.length,
+    parsed: sheet.rows.length,
   });
 }
