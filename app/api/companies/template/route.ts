@@ -41,7 +41,9 @@ export async function GET() {
     "segment",
     "size",
     "head_office_address",
-    "city_regency",
+    // Was "city_regency" — renamed so the spreadsheet header matches the
+    // "Region" column shown in the UI. The importer accepts both names.
+    "region",
     "country",
     "postal_code",
     "website",

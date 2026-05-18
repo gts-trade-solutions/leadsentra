@@ -7,6 +7,7 @@ import EmptyState from "@/components/EmptyState";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
+import SelectAllCheckbox from "@/components/SelectAllCheckbox";
 
 import {
   getMySender,
@@ -136,20 +137,6 @@ export default function ContactsPage() {
   // Staff (admin + moderator) bypass the unlock/credit flow entirely.
   const isStaffUser = isAdmin || user?.role === "moderator";
 
-  // Table headers. The Select column is admin-only (drives bulk-delete);
-  // moderators and regular users get a tidier table without checkboxes.
-  const headers = [
-    ...(isAdmin ? ["Select"] : []),
-    "Name",
-    "Email",
-    "Title",
-    "Company",
-    "Location",
-    "Phone",
-    "Social",
-    "Actions",
-  ];
-
   // wallet
   const [wallet, setWallet] = useState<number | null>(null);
 
@@ -192,6 +179,50 @@ export default function ContactsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+
+  // Admin-only select-all. "All" = every row passing the current filter
+  // (across pages) — that's what the header checkbox is expected to do in
+  // bulk-delete tooling. Restricting it to the current page would force the
+  // admin to paginate just to delete a filtered result set.
+  const filteredIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const allFilteredSelected =
+    filteredIds.length > 0 && filteredIds.every((id) => selectedIds.has(id));
+  const someFilteredSelected =
+    !allFilteredSelected && filteredIds.some((id) => selectedIds.has(id));
+  function toggleSelectAll(checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of filteredIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  // Table headers. The Select column is admin-only (drives bulk-delete);
+  // moderators and regular users get a tidier table without checkboxes.
+  const headers: (string | JSX.Element)[] = [
+    ...(isAdmin
+      ? [
+          <SelectAllCheckbox
+            key="select-all"
+            allChecked={allFilteredSelected}
+            someChecked={someFilteredSelected}
+            onChange={toggleSelectAll}
+            ariaLabel="Select all filtered contacts"
+          />,
+        ]
+      : []),
+    "Name",
+    "Email",
+    "Title",
+    "Company",
+    "Location",
+    "Phone",
+    "Social",
+    "Actions",
+  ];
 
   // add contact modal
   const [showAdd, setShowAdd] = useState(false);

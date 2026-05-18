@@ -82,6 +82,8 @@ export async function GET(req: NextRequest) {
         c.segment,
         c.size,
         c.country,
+        c.city_regency,
+        c.phone_main,
         c.website,
         c.linkedin,
         c.meta,
@@ -100,7 +102,12 @@ export async function GET(req: NextRequest) {
       try { return typeof row.meta === "string" ? JSON.parse(row.meta) : row.meta || {}; }
       catch { return {}; }
     })();
-    const cityCountry = [meta.city_regency, row.country].filter(Boolean).join(", ");
+    // city_regency and phone_main now live on direct columns (the importer
+    // writes there). Fall back to legacy `meta.*` so older rows that only
+    // stored these inside the JSON blob still render.
+    const cityRegency = row.city_regency ?? meta.city_regency ?? "";
+    const phoneMain   = row.phone_main   ?? meta.phone_main   ?? "";
+    const cityCountry = [cityRegency, row.country].filter(Boolean).join(", ");
     return {
       company_id: row.company_id,
       name: meta.trading_name || meta.legal_name || row.company_name || row.company_id,
@@ -108,6 +115,10 @@ export async function GET(req: NextRequest) {
       companyType: row.company_type ?? "",
       segment: row.segment ?? "",
       size: row.size ?? "",
+      // Exposed as first-class fields so the table can render them without
+      // re-parsing strings or meta JSON.
+      city_regency: cityRegency,
+      phone: phoneMain,
       location: cityCountry,
       country: row.country ?? "",
       website: row.website ?? "",

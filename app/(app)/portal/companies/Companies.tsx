@@ -7,6 +7,7 @@ import EmptyState from "@/components/EmptyState";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
+import SelectAllCheckbox from "@/components/SelectAllCheckbox";
 import {
   Plus,
   Upload,
@@ -81,6 +82,7 @@ type Row = {
   companyType: string; // replaces "industry"
   segment: string;     // Truck / Bus / Agriculture / ...
   size: string;
+  city_regency: string; // shown as the "Region" column
   location: string; // raw country (kept from old behavior — see load())
   country: string;  // explicit country field
   contacts: number; // display count
@@ -135,18 +137,6 @@ export default function CompaniesPage() {
   // Staff (admin + moderator) can bulk-import; regular users can't.
   const canImport = isAdmin || user?.role === "moderator";
 
-  // Admin-only "Select" column drives the bulk-delete flow. Hidden for
-  // everyone else so the checkboxes don't tease a capability they don't have.
-  const headers = [
-    ...(isAdmin ? ["Select"] : []),
-    "Company Name",
-    "Company Type",
-    "Size",
-    "Location",
-    "Contacts",
-    "Actions",
-  ];
-
   // bulk delete (admin only)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
@@ -156,6 +146,48 @@ export default function CompaniesPage() {
   const [allRows, setAllRows] = useState<Row[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Admin-only select-all. Matches the contacts page: ticks every row that
+  // passes the current filter (across pages), not just the visible page.
+  const filteredCompanyIds = useMemo(() => rows.map((r) => r.company_id), [rows]);
+  const allFilteredSelected =
+    filteredCompanyIds.length > 0 &&
+    filteredCompanyIds.every((id) => selectedIds.has(id));
+  const someFilteredSelected =
+    !allFilteredSelected &&
+    filteredCompanyIds.some((id) => selectedIds.has(id));
+  function toggleSelectAll(checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of filteredCompanyIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  // Admin-only "Select" column drives the bulk-delete flow. Hidden for
+  // everyone else so the checkboxes don't tease a capability they don't have.
+  const headers: (string | JSX.Element)[] = [
+    ...(isAdmin
+      ? [
+          <SelectAllCheckbox
+            key="select-all"
+            allChecked={allFilteredSelected}
+            someChecked={someFilteredSelected}
+            onChange={toggleSelectAll}
+            ariaLabel="Select all filtered companies"
+          />,
+        ]
+      : []),
+    "Company Name",
+    "Company Type",
+    "Region",
+    "Location",
+    "Contacts",
+    "Actions",
+  ];
 
   // search / filters / sort / pagination
   const [search, setSearch] = useState("");
@@ -268,6 +300,8 @@ export default function CompaniesPage() {
     type: "",
     segment: "",
     size: "",
+    region: "",
+    phone: "",
     website: "",
     linkedin: "",
     country: "",
@@ -283,11 +317,14 @@ export default function CompaniesPage() {
       type: r.companyType || "",
       segment: "",
       size: r.size || "",
+      region: r.city_regency || "",
+      phone: (r as any).phone || "",
       website: "",
       linkedin: "",
       country: r.country || r.location || "",
     });
-    // Best-effort: pull the full record to fill segment/website/linkedin.
+    // Best-effort: pull the full record to fill segment/website/linkedin
+    // and anything else the list query doesn't return.
     try {
       const res = await fetch(`/api/companies/${encodeURIComponent(r.company_id)}/full`, {
         credentials: "same-origin",
@@ -302,6 +339,8 @@ export default function CompaniesPage() {
           type: c.company_type || c.industry || f.type,
           segment: c.segment || f.segment,
           size: c.size || f.size,
+          region: c.city_regency || f.region,
+          phone: c.phone_main || f.phone,
           website: c.website || f.website,
           linkedin: c.linkedin || f.linkedin,
           country: c.country || f.country,
@@ -326,6 +365,8 @@ export default function CompaniesPage() {
           type: editCompanyForm.type.trim(),
           segment: editCompanyForm.segment.trim(),
           size: editCompanyForm.size.trim(),
+          region: editCompanyForm.region.trim(),
+          phone: editCompanyForm.phone.trim(),
           website: editCompanyForm.website.trim(),
           linkedin: editCompanyForm.linkedin.trim(),
           country: editCompanyForm.country.trim(),
@@ -738,7 +779,8 @@ export default function CompaniesPage() {
       </button>
     ),
     companyType: r.companyType || "—",
-    size: r.size || "—",
+    // Header reads "Region"; backed by companies.meta.city_regency.
+    region: r.city_regency || "—",
     location: r.location || "—",
     contacts: (
       <button
@@ -1073,30 +1115,6 @@ export default function CompaniesPage() {
             </select>
           </div>
 
-          {/* size */}
-          <div className="md:col-span-2">
-            <label className="text-xs text-gray-400 block mb-1">
-              Company Size
-            </label>
-            <select
-              value={filters.size}
-              onChange={(e) =>
-                setFilters((f) => ({
-                  ...f,
-                  size: e.target.value as SizeBucket,
-                }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300
-             focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              {SIZE_BUCKETS.map((b) => (
-                <option key={b.value} value={b.value}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {/* country */}
           <div className="md:col-span-2">
             <label className="text-xs text-gray-400 block mb-1">Country</label>
@@ -1154,37 +1172,6 @@ export default function CompaniesPage() {
               onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
             />
-          </div>
-
-          {/* sort controls — Sort dropdown and the A↔Z direction toggle share
-              a single cell so they read as one control instead of drifting
-              apart visually. */}
-          <div className="md:col-span-2">
-            <label className="text-xs text-gray-400 block mb-1">Sort</label>
-            <div className="flex gap-2">
-              <select
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as any)}
-                className="flex-1 min-w-0 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-              >
-                <option value="name">Name</option>
-                <option value="companyType">Type</option>
-                <option value="size">Size</option>
-                <option value="location">Location</option>
-              </select>
-              <button
-                onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-                className="shrink-0 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 hover:border-gray-600 flex items-center gap-1 text-sm"
-                title={sortDir === "asc" ? "Ascending (A→Z)" : "Descending (Z→A)"}
-              >
-                {sortDir === "asc" ? (
-                  <SortAsc className="w-4 h-4" />
-                ) : (
-                  <SortDesc className="w-4 h-4" />
-                )}
-                {sortDir === "asc" ? "A→Z" : "Z→A"}
-              </button>
-            </div>
           </div>
 
           {/* Footer row: Add-new-segment (staff only) + Clear + Showing count.
@@ -1472,6 +1459,25 @@ export default function CompaniesPage() {
                 <input
                   value={editCompanyForm.country}
                   onChange={(e) => setEditCompanyForm((f) => ({ ...f, country: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Region</label>
+                <input
+                  value={editCompanyForm.region}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, region: e.target.value }))}
+                  placeholder="City / regency"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={editCompanyForm.phone}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="+1 555 0100"
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
                 />
               </div>

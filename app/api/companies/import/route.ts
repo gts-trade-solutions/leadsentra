@@ -93,7 +93,10 @@ const HEADER_ALIASES: Record<string, string[]> = {
   legal_name:          ["legal_name"],
   trading_name:        ["trading_name"],
   head_office_address: ["head_office_address", "address"],
-  city_regency:        ["city_regency", "city"],
+  // The UI surfaces this as the "Region" column and the new .xlsx template
+  // uses `region` as its header, so accept that spelling alongside the
+  // legacy `city_regency` / `city` headers.
+  city_regency:        ["region", "city_regency", "city"],
   postal_code:         ["postal_code", "zip", "zipcode"],
   phone_main:          ["phone_main", "phone"],
   email_general:       ["email_general", "email"],

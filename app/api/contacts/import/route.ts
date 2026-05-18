@@ -90,6 +90,32 @@ export async function POST(req: Request) {
   let failed = 0;
   const errors: RowError[] = [];
 
+  // Build a one-shot lookup of every existing company so we can resolve a
+  // `company_id` cell that actually contains a company NAME (a very common
+  // mistake when users fill the contacts template after importing companies
+  // with auto-generated UUIDs). Maps both real ids and lower-cased names →
+  // canonical company_id.
+  const companyLookup = new Map<string, string>();
+  {
+    const [companyRows] = await db.execute(
+      "SELECT company_id, company_name FROM companies"
+    );
+    for (const c of companyRows as any[]) {
+      const id = String(c.company_id ?? "").trim();
+      const nm = String(c.company_name ?? "").trim().toLowerCase();
+      if (id) companyLookup.set(id, id);
+      if (nm) companyLookup.set(nm, id);
+    }
+  }
+  function resolveCompanyId(raw: string | null): string | null {
+    if (!raw) return null;
+    const v = raw.trim();
+    if (!v) return null;
+    // Try exact id, then case-insensitive name. Falls back to the raw value
+    // so existing flows that already used valid UUIDs keep working unchanged.
+    return companyLookup.get(v) ?? companyLookup.get(v.toLowerCase()) ?? v;
+  }
+
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -112,6 +138,8 @@ export async function POST(req: Request) {
         continue;
       }
 
+      const resolvedCompanyId = resolveCompanyId(row.company_id ?? null);
+
       const id = randomUUID();
       try {
         await conn.execute(
@@ -122,7 +150,7 @@ export async function POST(req: Request) {
           [
             id,
             session.id,
-            row.company_id ?? null,
+            resolvedCompanyId,
             row.contact_name ?? null,
             email,
             row.title ?? null,

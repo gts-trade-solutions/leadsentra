@@ -36,6 +36,12 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
     website: "website",
     linkedin: "linkedin",
     country: "country",
+    // City/regency lives on its own direct column; the UI calls it "Region".
+    region: "city_regency",
+    city_regency: "city_regency",
+    // Main contact phone for the company.
+    phone: "phone_main",
+    phone_main: "phone_main",
   };
 
   for (const [key, col] of Object.entries(map)) {
