@@ -76,31 +76,69 @@ export async function POST(
     [campaignId]
   );
 
-  // CLAIM a batch atomically so two concurrent /send calls (eg. user
-  // double-clicks Send, or two browser tabs) cannot grab the same rows and
-  // double-charge / double-deliver.  We flip status queued -> sending first,
-  // then SELECT the rows we just claimed.  Any other worker hitting the table
-  // will see those rows as 'sending' (not 'queued') and skip them.
-  const claimToken = crypto.randomUUID().replace(/-/g, "");
+  // RECOVERY: revive any rows stuck in 'sent' state with NO message_id from
+  // a previous batch that crashed mid-process.  Without this, those rows
+  // would never be retried and the campaign would forever look stuck.
+  // 'sent' + message_id NULL + older than 5 min = abandoned claim.
   await db.execute(
     `UPDATE campaign_recipients
-        SET status = 'sent', tracking_token = COALESCE(tracking_token, ?)
-      WHERE id IN (
-        SELECT id FROM (
-          SELECT id FROM campaign_recipients
-           WHERE campaign_id = ? AND status = 'queued'
-           ORDER BY id ASC
-           LIMIT ${limit}
-        ) AS pick
-      )`,
-    [claimToken, campaignId]
+        SET status = 'queued', last_event_at = NOW()
+      WHERE campaign_id = ?
+        AND status = 'sent'
+        AND message_id IS NULL
+        AND (last_event_at IS NULL OR last_event_at < (NOW() - INTERVAL 5 MINUTE))`,
+    [campaignId]
   );
+
+  // CLAIM a batch atomically using SELECT...FOR UPDATE inside a transaction.
+  // Two parallel /send calls can't grab the same rows: the second blocks
+  // until the first's transaction commits, then sees the rows as 'sent'.
+  // We return the EXACT list of claimed ids so the SELECT below filters
+  // precisely (not just "status='sent'" which would pick up other batches).
+  const conn = await db.getConnection();
+  let claimedIds: string[] = [];
+  try {
+    await conn.beginTransaction();
+    const [pickRows] = await conn.execute(
+      `SELECT id FROM campaign_recipients
+        WHERE campaign_id = ? AND status = 'queued'
+        ORDER BY id ASC
+        LIMIT ${limit}
+        FOR UPDATE`,
+      [campaignId]
+    );
+    claimedIds = (pickRows as any[]).map((r) => r.id as string);
+    if (claimedIds.length > 0) {
+      const ph = claimedIds.map(() => "?").join(",");
+      await conn.execute(
+        `UPDATE campaign_recipients
+            SET status = 'sent', last_event_at = NOW()
+          WHERE id IN (${ph})`,
+        claimedIds
+      );
+    }
+    await conn.commit();
+  } catch (e: any) {
+    await conn.rollback();
+    return NextResponse.json(
+      { error: e?.message || "Claim failed" },
+      { status: 500 }
+    );
+  } finally {
+    conn.release();
+  }
+
+  if (claimedIds.length === 0) {
+    // Nothing left to send — likely a duplicate /send call after the queue drained.
+    return NextResponse.json({ ok: true, sent: 0, failed: 0, skipped: 0, errors: [] });
+  }
+
+  const idPlaceholders = claimedIds.map(() => "?").join(",");
   const [recipRows] = await db.execute(
     `SELECT id, email, tracking_token, message_id, status
        FROM campaign_recipients
-      WHERE campaign_id = ? AND status = 'sent'
-      LIMIT ${limit}`,
-    [campaignId]
+      WHERE id IN (${idPlaceholders})`,
+    claimedIds
   );
   const recips = recipRows as any[];
 
