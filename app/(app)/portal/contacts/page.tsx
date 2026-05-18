@@ -36,6 +36,8 @@ import {
   ShieldCheck,
   RefreshCcw,
   AlertTriangle,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 
 /* ─────────────────────────── Types ─────────────────────────── */
@@ -86,17 +88,11 @@ type CompanyRef = { company_id: string; company_name: string };
 
 export default function ContactsPage() {
 
-  const headers = [
-    "Select",
-    "Name",
-    "Email",
-    "Title",
-    "Company",
-    "Location",
-    "Phone",
-    "Social",
-    "Actions",
-  ];
+  // Admin-only "Select" column drives the bulk-delete flow. Hidden for
+  // moderators and regular users so the checkboxes don't visually suggest a
+  // capability they don't have.
+  // (isAdmin is declared just below; the headers list is recomputed each
+  // render so reading it here is fine.)
 
   // sender / verify
   const [mySender, setMySender] = useState<EmailIdentityRow | null>(null);
@@ -139,6 +135,20 @@ export default function ContactsPage() {
   const isAdmin = user?.role === "admin";
   // Staff (admin + moderator) bypass the unlock/credit flow entirely.
   const isStaffUser = isAdmin || user?.role === "moderator";
+
+  // Table headers. The Select column is admin-only (drives bulk-delete);
+  // moderators and regular users get a tidier table without checkboxes.
+  const headers = [
+    ...(isAdmin ? ["Select"] : []),
+    "Name",
+    "Email",
+    "Title",
+    "Company",
+    "Location",
+    "Phone",
+    "Social",
+    "Actions",
+  ];
 
   // wallet
   const [wallet, setWallet] = useState<number | null>(null);
@@ -188,6 +198,80 @@ export default function ContactsPage() {
   const [companies, setCompanies] = useState<CompanyRef[]>([]);
   const [addBusy, setAddBusy] = useState(false);
   const [addErr, setAddErr] = useState<string | null>(null);
+
+  // edit contact modal
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editErr, setEditErr] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({
+    contact_name: "",
+    title: "",
+    email: "",
+    phone: "",
+    linkedin_url: "",
+    company_id: "",
+  });
+
+  async function openEdit(r: Row) {
+    setEditErr(null);
+    setEditingId(r.id);
+    setEditForm({
+      contact_name: r.name || "",
+      title: r.title || "",
+      email: r.email || "",
+      phone: r.phone || "",
+      linkedin_url: r.linkedin_url || "",
+      company_id: "", // resolved when companies list loads
+    });
+    // Lazy-load the companies dropdown the first time the user edits a row.
+    if (companies.length === 0) {
+      try {
+        const res = await fetch("/api/companies?limit=5000", { credentials: "same-origin" });
+        const j = await res.json().catch(() => ({}));
+        const list = Array.isArray(j?.data) ? j.data : [];
+        setCompanies(list.map((c: any) => ({ company_id: c.company_id, company_name: c.company_name })));
+        // Best-effort: prefill the select with the row's current company by name
+        const match = list.find((c: any) => c.company_name === r.company);
+        if (match) setEditForm((f) => ({ ...f, company_id: match.company_id }));
+      } catch {
+        setCompanies([]);
+      }
+    } else {
+      const match = companies.find((c) => c.company_name === r.company);
+      if (match) setEditForm((f) => ({ ...f, company_id: match.company_id }));
+    }
+  }
+
+  async function saveEdit() {
+    if (!editingId) return;
+    setEditBusy(true);
+    setEditErr(null);
+    try {
+      const payload: Record<string, any> = {
+        contact_name: editForm.contact_name.trim(),
+        title: editForm.title.trim(),
+        email: editForm.email.trim(),
+        phone: editForm.phone.trim(),
+        linkedin_url: editForm.linkedin_url.trim(),
+      };
+      if (editForm.company_id) payload.company_id = editForm.company_id;
+      const res = await fetch(`/api/contacts/${editingId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Update failed");
+      toast({ title: "Contact updated" });
+      setEditingId(null);
+      await load();
+    } catch (e: any) {
+      setEditErr(e?.message || "Update failed");
+    } finally {
+      setEditBusy(false);
+    }
+  }
 
   // Inline "+ New company" creator inside the Add Contact modal.  Lets the
   // user create a company without leaving the contact-creation flow.
@@ -895,13 +979,13 @@ export default function ContactsPage() {
           <Plus className="w-4 h-4" /> Add Contact
         </button>
 
-        {/* Bulk Delete (visible when any rows selected) */}
-        {selectedIds.size > 0 && (
+        {/* Bulk Delete — admin only. Backend also rejects non-admin callers. */}
+        {isAdmin && selectedIds.size > 0 && (
           <button
             onClick={() => setShowBulkDelete(true)}
             className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium"
           >
-            Delete {selectedIds.size}
+            <Trash2 className="w-4 h-4" /> Delete {selectedIds.size}
           </button>
         )}
 
@@ -1156,21 +1240,25 @@ export default function ContactsPage() {
           <Table
             headers={headers}
             data={currentRows.map((r) => ({
-              Select: (
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(r.id)}
-                  onChange={(e) => {
-                    setSelectedIds((prev) => {
-                      const next = new Set(prev);
-                      if (e.target.checked) next.add(r.id);
-                      else next.delete(r.id);
-                      return next;
-                    });
-                  }}
-                  aria-label={`Select ${r.name}`}
-                />
-              ),
+              ...(isAdmin
+                ? {
+                    Select: (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(r.id)}
+                        onChange={(e) => {
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(r.id);
+                            else next.delete(r.id);
+                            return next;
+                          });
+                        }}
+                        aria-label={`Select ${r.name}`}
+                      />
+                    ),
+                  }
+                : {}),
               name: (
                 <div className="flex flex-col">
                   <span className="font-medium">{r.name}</span>
@@ -1196,7 +1284,6 @@ export default function ContactsPage() {
               Social: <SocialCell r={r} />,
               Actions: r.is_unlocked ? (
                 <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-                  {/* <span className="text-xs text-emerald-400">Unlocked</span> */}
                   <div className="flex gap-2">
                     <button
                       onClick={() => launchSend(r)}
@@ -1218,17 +1305,33 @@ export default function ContactsPage() {
                     >
                       <Eye className="w-3.5 h-3.5" /> View
                     </button>
+                    <button
+                      onClick={() => openEdit(r)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
+                      title="Edit contact details"
+                    >
+                      <Pencil className="w-3.5 h-3.5" /> Edit
+                    </button>
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={() => setConfirmUnlockId(r.id)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap disabled:opacity-60"
-                  title="Spend credits to reveal this contact's details"
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  Unlock
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmUnlockId(r.id)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap disabled:opacity-60"
+                    title="Spend credits to reveal this contact's details"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    Unlock
+                  </button>
+                  <button
+                    onClick={() => openEdit(r)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
+                    title="Edit contact details"
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit
+                  </button>
+                </div>
               ),
             }))}
           />
@@ -1852,6 +1955,93 @@ export default function ContactsPage() {
                 className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-60"
               >
                 {addBusy ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Contact Modal — owners can edit their own rows; staff can edit any.
+          Backend PATCH /api/contacts/[id] enforces ownership. */}
+      {editingId && (
+        <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900">
+            <div className="px-5 pt-5 pb-3 border-b border-gray-800 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Edit contact</h3>
+              {editErr && <div className="text-sm text-red-300">{editErr}</div>}
+            </div>
+            <div className="px-5 py-4 max-h-[70vh] overflow-y-auto grid md:grid-cols-2 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Company</label>
+                <select
+                  value={editForm.company_id}
+                  onChange={(e) => setEditForm((f) => ({ ...f, company_id: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                >
+                  <option value="">— keep current —</option>
+                  {companies.map((c) => (
+                    <option key={c.company_id} value={c.company_id}>
+                      {c.company_name} ({c.company_id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Name</label>
+                <input
+                  value={editForm.contact_name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, contact_name: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Title</label>
+                <input
+                  value={editForm.title}
+                  onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Email</label>
+                <input
+                  type="email"
+                  value={editForm.email}
+                  onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Phone</label>
+                <input
+                  value={editForm.phone}
+                  onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">LinkedIn URL</label>
+                <input
+                  value={editForm.linkedin_url}
+                  onChange={(e) => setEditForm((f) => ({ ...f, linkedin_url: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-800 flex items-center justify-end gap-2">
+              <button
+                onClick={() => { setEditingId(null); setEditErr(null); }}
+                disabled={editBusy}
+                className="px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm hover:border-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={editBusy || !editForm.contact_name.trim()}
+                className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-60"
+              >
+                {editBusy ? "Saving…" : "Save changes"}
               </button>
             </div>
           </div>

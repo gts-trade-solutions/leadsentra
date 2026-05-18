@@ -20,6 +20,8 @@ import {
   SortDesc,
   Lock,
   CheckCircle2,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 // Supabase client removed during MySQL migration; auth/wallet now use /api/* routes.
 
@@ -133,13 +135,22 @@ export default function CompaniesPage() {
   // Staff (admin + moderator) can bulk-import; regular users can't.
   const canImport = isAdmin || user?.role === "moderator";
 
+  // Admin-only "Select" column drives the bulk-delete flow. Hidden for
+  // everyone else so the checkboxes don't tease a capability they don't have.
   const headers = [
+    ...(isAdmin ? ["Select"] : []),
     "Company Name",
     "Company Type",
     "Size",
     "Location",
     "Contacts",
+    "Actions",
   ];
+
+  // bulk delete (admin only)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
 
   // data
   const [allRows, setAllRows] = useState<Row[]>([]);
@@ -245,6 +256,92 @@ export default function CompaniesPage() {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  // Edit company modal — uses PATCH /api/companies/[id]. The backend
+  // only accepts the fields mapped below; we keep the form intentionally
+  // small to match it (no schema drift).
+  const [editCompanyId, setEditCompanyId] = useState<string | null>(null);
+  const [editCompanyBusy, setEditCompanyBusy] = useState(false);
+  const [editCompanyErr, setEditCompanyErr] = useState<string | null>(null);
+  const [editCompanyForm, setEditCompanyForm] = useState({
+    name: "",
+    type: "",
+    segment: "",
+    size: "",
+    website: "",
+    linkedin: "",
+    country: "",
+  });
+
+  async function openCompanyEdit(r: Row) {
+    setEditCompanyErr(null);
+    setEditCompanyId(r.company_id);
+    // Prefill from the row (full company is not always loaded; admin can
+    // refine via the full company modal if they need more fields).
+    setEditCompanyForm({
+      name: r.name || "",
+      type: r.companyType || "",
+      segment: "",
+      size: r.size || "",
+      website: "",
+      linkedin: "",
+      country: r.country || r.location || "",
+    });
+    // Best-effort: pull the full record to fill segment/website/linkedin.
+    try {
+      const res = await fetch(`/api/companies/${encodeURIComponent(r.company_id)}/full`, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const j = await res.json().catch(() => ({}));
+      const c = j?.company || j;
+      if (c) {
+        setEditCompanyForm((f) => ({
+          ...f,
+          name: c.company_name || c.trading_name || c.legal_name || f.name,
+          type: c.company_type || c.industry || f.type,
+          segment: c.segment || f.segment,
+          size: c.size || f.size,
+          website: c.website || f.website,
+          linkedin: c.linkedin || f.linkedin,
+          country: c.country || f.country,
+        }));
+      }
+    } catch {
+      // Non-fatal; user can still edit using the prefilled row values.
+    }
+  }
+
+  async function saveCompanyEdit() {
+    if (!editCompanyId) return;
+    setEditCompanyBusy(true);
+    setEditCompanyErr(null);
+    try {
+      const res = await fetch(`/api/companies/${encodeURIComponent(editCompanyId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          name: editCompanyForm.name.trim(),
+          type: editCompanyForm.type.trim(),
+          segment: editCompanyForm.segment.trim(),
+          size: editCompanyForm.size.trim(),
+          website: editCompanyForm.website.trim(),
+          linkedin: editCompanyForm.linkedin.trim(),
+          country: editCompanyForm.country.trim(),
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Update failed");
+      toast({ title: "Company updated" });
+      setEditCompanyId(null);
+      await load();
+    } catch (e: any) {
+      setEditCompanyErr(e?.message || "Update failed");
+    } finally {
+      setEditCompanyBusy(false);
+    }
+  }
   const [form, setForm] = useState({
     company_id: "",
     company_name: "",
@@ -612,6 +709,25 @@ export default function CompaniesPage() {
 
   // table data mapping
   const tableData = currentRows.map((r) => ({
+    ...(isAdmin
+      ? {
+          Select: (
+            <input
+              type="checkbox"
+              checked={selectedIds.has(r.company_id)}
+              onChange={(e) => {
+                setSelectedIds((prev) => {
+                  const next = new Set(prev);
+                  if (e.target.checked) next.add(r.company_id);
+                  else next.delete(r.company_id);
+                  return next;
+                });
+              }}
+              aria-label={`Select ${r.name}`}
+            />
+          ),
+        }
+      : {}),
     name: (
       <button
         onClick={() => openCompanyModal(r.company_id)}
@@ -627,10 +743,19 @@ export default function CompaniesPage() {
     contacts: (
       <button
         onClick={() => openContactsModal(r.company_id)}
-        className="inline-flex items-center justify-center rounded-md px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs"
+        className="inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs"
         title="View unlocked contacts"
       >
-        View ({r.contacts})
+        View <span className="text-gray-300">({r.contacts})</span>
+      </button>
+    ),
+    Actions: (
+      <button
+        onClick={() => openCompanyEdit(r)}
+        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
+        title="Edit company details"
+      >
+        <Pencil className="w-3.5 h-3.5" /> Edit
       </button>
     ),
   }));
@@ -854,6 +979,16 @@ export default function CompaniesPage() {
           Export
         </button>
 
+        {/* Bulk Delete — admin only. Backend also rejects non-admin callers. */}
+        {isAdmin && selectedIds.size > 0 && (
+          <button
+            onClick={() => setShowBulkDelete(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium"
+          >
+            <Trash2 className="w-4 h-4" /> Delete {selectedIds.size}
+          </button>
+        )}
+
         {/* Available for everyone */}
         {/* <button
           onClick={load}
@@ -953,7 +1088,8 @@ export default function CompaniesPage() {
             </select>
           </div>
 
-          {/* segment */}
+          {/* segment — input for "+ new segment" is moved out of this cell so
+              the Segment column stays the same height as its neighbours. */}
           <div className="md:col-span-2">
             <label className="text-xs text-gray-400 block mb-1">Segment</label>
             <select
@@ -970,25 +1106,6 @@ export default function CompaniesPage() {
                 </option>
               ))}
             </select>
-            <div className="mt-1 flex gap-1">
-              <input
-                type="text"
-                value={newSegment}
-                onChange={(e) => setNewSegment(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSegment(); } }}
-                placeholder="Add new segment…"
-                className="flex-1 min-w-0 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-300 placeholder-gray-500"
-              />
-              <button
-                type="button"
-                onClick={addSegment}
-                disabled={addingSegment || !newSegment.trim()}
-                className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs disabled:opacity-50"
-                title="Add segment"
-              >
-                +
-              </button>
-            </div>
           </div>
 
           {/* created date range */}
@@ -1011,44 +1128,69 @@ export default function CompaniesPage() {
             />
           </div>
 
-          {/* sort controls */}
-          <div className="md:col-span-1">
+          {/* sort controls — Sort dropdown and the A↔Z direction toggle share
+              a single cell so they read as one control instead of drifting
+              apart visually. */}
+          <div className="md:col-span-2">
             <label className="text-xs text-gray-400 block mb-1">Sort</label>
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as any)}
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="name">Name</option>
-              <option value="companyType">Type</option>
-              <option value="size">Size</option>
-              <option value="location">Location</option>
-            </select>
-          </div>
-          <div className="md:col-span-1 flex items-end">
-            <button
-              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 hover:border-gray-600 flex items-center justify-center gap-2"
-              title={sortDir === "asc" ? "Ascending (A→Z)" : "Descending (Z→A)"}
-            >
-              {sortDir === "asc" ? (
-                <SortAsc className="w-4 h-4" />
-              ) : (
-                <SortDesc className="w-4 h-4" />
-              )}
-              {sortDir === "asc" ? "A→Z" : "Z→A"}
-            </button>
+            <div className="flex gap-2">
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as any)}
+                className="flex-1 min-w-0 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
+              >
+                <option value="name">Name</option>
+                <option value="companyType">Type</option>
+                <option value="size">Size</option>
+                <option value="location">Location</option>
+              </select>
+              <button
+                onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+                className="shrink-0 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 hover:border-gray-600 flex items-center gap-1 text-sm"
+                title={sortDir === "asc" ? "Ascending (A→Z)" : "Descending (Z→A)"}
+              >
+                {sortDir === "asc" ? (
+                  <SortAsc className="w-4 h-4" />
+                ) : (
+                  <SortDesc className="w-4 h-4" />
+                )}
+                {sortDir === "asc" ? "A→Z" : "Z→A"}
+              </button>
+            </div>
           </div>
 
-          {/* clear & count */}
-          <div className="md:col-span-12 flex items-center justify-between">
+          {/* Footer row: Add-new-segment (staff only) + Clear + Showing count.
+              Keeps the row count compact and stops "Clear" from sitting alone
+              on a wide empty row. */}
+          <div className="md:col-span-12 flex flex-wrap items-center gap-3">
+            {canImport && (
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={newSegment}
+                  onChange={(e) => setNewSegment(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSegment(); } }}
+                  placeholder="Add new segment…"
+                  className="w-48 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={addSegment}
+                  disabled={addingSegment || !newSegment.trim()}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs disabled:opacity-50"
+                  title="Add segment"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
             <button
               onClick={clearFilters}
-              className="px-3 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-lg text-sm"
+              className="px-3 py-1.5 bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-lg text-sm"
             >
               Clear
             </button>
-            <div className="text-xs text-gray-400">
+            <div className="ml-auto text-xs text-gray-400">
               Showing <b>{rows.length}</b> of <b>{allRows.length}</b>
             </div>
           </div>
@@ -1177,6 +1319,169 @@ export default function CompaniesPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Bulk Delete Confirm Modal — admin only.
+          Server-side rule: companies with linked contacts are SKIPPED, not
+          deleted. The dialog warns the user about this so a "delete 50, only
+          20 went" result doesn't look like a bug. */}
+      {showBulkDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
+            <h3 className="text-lg font-semibold text-white">
+              Delete {selectedIds.size} compan{selectedIds.size === 1 ? "y" : "ies"}?
+            </h3>
+            <p className="mt-2 text-sm text-gray-300">
+              This is permanent. Companies that still have linked contacts will
+              be <b>skipped</b> — detach or delete their contacts first.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setShowBulkDelete(false)}
+                disabled={bulkDeleteBusy}
+                className="px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setBulkDeleteBusy(true);
+                  try {
+                    const ids = Array.from(selectedIds);
+                    const res = await fetch("/api/companies/bulk-delete", {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      credentials: "same-origin",
+                      body: JSON.stringify({ ids }),
+                    });
+                    const j = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(j?.error || "Delete failed");
+                    toast({
+                      title: "Companies deleted",
+                      description: `${j.deleted ?? 0} removed${j.skipped ? ` · ${j.skipped} skipped (have contacts)` : ""}`,
+                    });
+                    setSelectedIds(new Set());
+                    setShowBulkDelete(false);
+                    await load();
+                  } catch (e: any) {
+                    toast({
+                      variant: "destructive",
+                      title: "Delete failed",
+                      description: e?.message || "Could not delete",
+                    });
+                  } finally {
+                    setBulkDeleteBusy(false);
+                  }
+                }}
+                disabled={bulkDeleteBusy}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium disabled:opacity-60"
+              >
+                {bulkDeleteBusy ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Company Modal — owners can edit their own rows; staff can edit any.
+          Backend PATCH /api/companies/[company_id] enforces ownership. */}
+      {editCompanyId && (
+        <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900">
+            <div className="px-5 pt-5 pb-3 border-b border-gray-800 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Edit company</h3>
+              {editCompanyErr && <div className="text-sm text-red-300">{editCompanyErr}</div>}
+            </div>
+            <div className="px-5 py-4 max-h-[70vh] overflow-y-auto grid md:grid-cols-2 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Company name</label>
+                <input
+                  value={editCompanyForm.name}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, name: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Company type</label>
+                <input
+                  value={editCompanyForm.type}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, type: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Segment</label>
+                {segmentOptions.length > 0 ? (
+                  <select
+                    value={editCompanyForm.segment}
+                    onChange={(e) => setEditCompanyForm((f) => ({ ...f, segment: e.target.value }))}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                  >
+                    <option value="">—</option>
+                    {segmentOptions.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={editCompanyForm.segment}
+                    onChange={(e) => setEditCompanyForm((f) => ({ ...f, segment: e.target.value }))}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                  />
+                )}
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Size</label>
+                <input
+                  value={editCompanyForm.size}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, size: e.target.value }))}
+                  placeholder="e.g. 51 - 200"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Country</label>
+                <input
+                  value={editCompanyForm.country}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, country: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Website</label>
+                <input
+                  value={editCompanyForm.website}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, website: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">LinkedIn</label>
+                <input
+                  value={editCompanyForm.linkedin}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, linkedin: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-800 flex items-center justify-end gap-2">
+              <button
+                onClick={() => { setEditCompanyId(null); setEditCompanyErr(null); }}
+                disabled={editCompanyBusy}
+                className="px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm hover:border-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveCompanyEdit}
+                disabled={editCompanyBusy || !editCompanyForm.name.trim()}
+                className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-60"
+              >
+                {editCompanyBusy ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Company Modal */}

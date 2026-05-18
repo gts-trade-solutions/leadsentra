@@ -3,6 +3,7 @@ import Topbar from '@/components/Topbar';
 import { AuthProvider } from '@/components/AuthProvider';
 import { JobsProvider } from '@/components/JobsProvider';
 import { JobsBar } from '@/components/JobsBar';
+import AuthGuard from '@/components/AuthGuard';
 
 export default function AppLayout({ children }) {
   return (
@@ -14,7 +15,11 @@ export default function AppLayout({ children }) {
             <Topbar />
             <main className="flex-1 overflow-y-auto p-6 custom-scrollbar">
               <div className="max-w-7xl mx-auto">
-                {children}
+                {/* AuthGuard at the portal root: handles sign-in redirect AND
+                    the per-moderator page-access allowlist enforcement.
+                    Nested AuthGuards inside individual pages stay a no-op
+                    once the parent has resolved the session. */}
+                <AuthGuard>{children}</AuthGuard>
               </div>
             </main>
           </div>

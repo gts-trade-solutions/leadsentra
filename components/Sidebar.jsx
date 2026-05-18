@@ -98,19 +98,64 @@ function isItemActive(item, pathname) {
   return pathname === item.href;
 }
 
+/**
+ * Map a portal href to the page-access key used by the moderator allowlist.
+ * Kept in sync with PORTAL_PAGES in lib/modPageAccess.ts and the matcher in
+ * AuthGuard.tsx. Hrefs outside /portal/* (the marketing dashboard, etc.)
+ * return null and are never hidden by the allowlist.
+ */
+function hrefToPageKey(href) {
+  if (!href || typeof href !== "string") return null;
+  const m = href.match(/^\/portal\/([^/?#]+)/);
+  if (!m) return null;
+  const key = m[1];
+  const known = new Set(["contacts", "companies", "campaigns", "multi-channel"]);
+  return known.has(key) ? key : null;
+}
+
+function itemAllowed(item, allow) {
+  // No restriction set → everything is allowed.
+  if (!Array.isArray(allow)) return true;
+  if (item.children) {
+    return item.children.some((c) => itemAllowed(c, allow));
+  }
+  const key = hrefToPageKey(item.href);
+  if (!key) return true; // unmanaged paths stay visible (dashboard, billing, …)
+  return allow.includes(key);
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showComingSoon, setShowComingSoon] = useState(false);
   const { user } = useOptionalAuth();
   const isStaff = user?.role === "admin" || user?.role === "moderator";
+  // For moderators, hide sidebar entries that fall outside the admin-defined
+  // allowlist. Non-moderators (admins, regular users) see everything they
+  // already saw before — `page_access` is only attached on the moderator path.
+  const moderatorAllow =
+    user?.role === "moderator" && Array.isArray(user?.page_access)
+      ? user.page_access
+      : null;
 
   const { active, comingSoon } = useMemo(() => {
-    const visible = ALL_ITEMS.filter((i) => !i.staffOnly || isStaff);
+    let visible = ALL_ITEMS.filter((i) => !i.staffOnly || isStaff);
+    if (moderatorAllow) {
+      visible = visible
+        .filter((i) => itemAllowed(i, moderatorAllow))
+        .map((i) => {
+          if (!i.children) return i;
+          // Trim children list to only the allowed ones.
+          return {
+            ...i,
+            children: i.children.filter((c) => itemAllowed(c, moderatorAllow)),
+          };
+        });
+    }
     const active = visible.filter((i) => !i.comingSoon);
     const comingSoon = visible.filter((i) => i.comingSoon);
     return { active, comingSoon };
-  }, [isStaff]);
+  }, [isStaff, moderatorAllow]);
 
   // Per-group expand state, keyed by item name.  Auto-expand any group
   // whose child route is currently active.

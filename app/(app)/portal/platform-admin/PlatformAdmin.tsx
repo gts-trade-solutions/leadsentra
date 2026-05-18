@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Mail,
   Lock,
+  KeyRound,
 } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
@@ -213,6 +214,8 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  // Per-moderator page-access editor target. null = closed.
+  const [accessTarget, setAccessTarget] = useState<UserRow | null>(null);
 
   async function load() {
     setLoading(true);
@@ -353,14 +356,25 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
                   <td className="px-3 py-2 text-right font-mono">{Number(u.balance || 0).toLocaleString()}</td>
                   <td className="px-3 py-2 text-xs text-gray-400">{new Date(u.created_at).toLocaleDateString()}</td>
                   <td className="px-3 py-2 text-right">
-                    {isAdmin && (
-                      <button
-                        onClick={() => remove(u)}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:bg-red-900/40 hover:border-red-700 text-gray-200 hover:text-red-200"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" /> Delete
-                      </button>
-                    )}
+                    <div className="inline-flex items-center gap-1">
+                      {isAdmin && u.role === "moderator" && (
+                        <button
+                          onClick={() => setAccessTarget(u)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:border-emerald-700 hover:text-emerald-200 text-gray-200"
+                          title="Set which portal pages this moderator can access"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" /> Access
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          onClick={() => remove(u)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:bg-red-900/40 hover:border-red-700 text-gray-200 hover:text-red-200"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -371,6 +385,164 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
       <div className="text-xs text-gray-500">{total.toLocaleString()} users total</div>
 
       {showCreate && <CreateUserModal onClose={() => { setShowCreate(false); load(); }} />}
+      {accessTarget && (
+        <PageAccessModal
+          target={accessTarget}
+          onClose={() => setAccessTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * PageAccessModal — admin-only editor for which portal pages a moderator can
+ * see. Mirrors the `pages` JSON stored in `moderator_page_access`. A null
+ * server value means "no override yet → allow everything".
+ */
+function PageAccessModal({
+  target,
+  onClose,
+}: {
+  target: UserRow;
+  onClose: () => void;
+}) {
+  type Page = { key: string; label: string };
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [allPages, setAllPages] = useState<Page[]>([]);
+  // null = use defaults (allow all); array = explicit allowlist.
+  const [pages, setPages] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await fetch(`/api/admin/moderators/${target.id}/page-access`, {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j?.error || "Failed to load");
+        if (cancelled) return;
+        setAllPages(Array.isArray(j?.all_pages) ? j.all_pages : []);
+        setPages(Array.isArray(j?.pages) ? j.pages : null);
+      } catch (e: any) {
+        if (!cancelled) setErr(e?.message || "Failed to load");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [target.id]);
+
+  const usingDefaults = pages === null;
+  const currentSet = new Set(pages ?? allPages.map((p) => p.key));
+
+  function togglePage(key: string) {
+    // First toggle from "inherit all" promotes the state to an explicit
+    // allowlist seeded with every page, then flips the one the user clicked.
+    setPages((prev) => {
+      const base = prev ?? allPages.map((p) => p.key);
+      const next = new Set(base);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return Array.from(next);
+    });
+  }
+
+  async function save(reset: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/admin/moderators/${target.id}/page-access`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(reset ? { reset: true } : { pages: pages ?? [] }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Save failed");
+      toast({ title: "Page access updated", description: target.email });
+      onClose();
+    } catch (e: any) {
+      setErr(e?.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+      <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-md p-5 space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Moderator page access</h2>
+          <p className="text-xs text-gray-400 mt-1 break-all">{target.email}</p>
+        </div>
+
+        {err && (
+          <div className="text-sm border border-red-600 bg-red-900/20 text-red-200 rounded-lg p-3">
+            {err}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="text-sm text-gray-400">Loading…</div>
+        ) : (
+          <>
+            <p className="text-xs text-gray-400">
+              {usingDefaults
+                ? "No override set — this moderator can access every portal page. Tick boxes to restrict."
+                : "Tick the pages this moderator is allowed to open."}
+            </p>
+            <ul className="space-y-2">
+              {allPages.map((p) => (
+                <li key={p.key}>
+                  <label className="flex items-center gap-2 text-sm text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={currentSet.has(p.key)}
+                      onChange={() => togglePage(p.key)}
+                    />
+                    <span>{p.label}</span>
+                    <span className="text-xs text-gray-500">/{p.key}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        <div className="flex justify-between gap-2 pt-2">
+          <button
+            onClick={() => save(true)}
+            disabled={busy || loading}
+            className="px-3 py-2 rounded-lg text-sm border border-gray-700 bg-gray-800 text-gray-200 hover:border-gray-600 disabled:opacity-60"
+            title="Remove the override — moderator will see every page again"
+          >
+            Reset to defaults
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              disabled={busy}
+              className="px-3 py-2 rounded-lg text-sm border border-gray-700 bg-gray-800 text-gray-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => save(false)}
+              disabled={busy || loading}
+              className="px-3 py-2 rounded-lg text-sm bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60"
+            >
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

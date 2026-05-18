@@ -8,6 +8,11 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Bulk delete is admin-only. Moderators/users hitting this endpoint should
+  // get the same Forbidden as if it didn't exist — they have per-row delete.
+  if (session.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden — admin only" }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const ids: string[] = Array.isArray(body?.ids) ? body.ids.filter((x: any) => typeof x === "string" && x) : [];
@@ -15,14 +20,11 @@ export async function POST(req: Request) {
   if (ids.length > 5000) return NextResponse.json({ error: "Too many ids (max 5000)" }, { status: 400 });
 
   const placeholders = ids.map(() => "?").join(",");
-  const isAdmin = session.role === "admin";
 
-  // Filter to rows the user is allowed to delete
+  // Admin can delete any contact.
   const [rows] = await db.query(
-    isAdmin
-      ? `SELECT id FROM contacts WHERE id IN (${placeholders})`
-      : `SELECT id FROM contacts WHERE id IN (${placeholders}) AND (user_id = ? OR user_id IS NULL)`,
-    isAdmin ? ids : [...ids, session.id]
+    `SELECT id FROM contacts WHERE id IN (${placeholders})`,
+    ids
   );
   const allowed = (rows as any[]).map((r) => r.id);
   if (!allowed.length) return NextResponse.json({ deleted: 0 });
