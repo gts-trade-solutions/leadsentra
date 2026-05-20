@@ -32,7 +32,14 @@ export async function GET(req: Request) {
   const q          = (url.searchParams.get("q") || "").trim().toLowerCase();
   const segment    = (url.searchParams.get("segment") || "").trim();
   const country    = (url.searchParams.get("country") || "").trim();
-  const companyId  = (url.searchParams.get("company_id") || "").trim();
+  // Multi-select aware: caller can pass company_id repeatedly (?company_id=a&company_id=b)
+  // or as a comma-separated single value (?company_id=a,b). Both legacy single-value
+  // callers and the new multi-select Audience picker round-trip cleanly.
+  const companyIds = url.searchParams
+    .getAll("company_id")
+    .flatMap((v) => v.split(","))
+    .map((v) => v.trim())
+    .filter(Boolean);
   const limit      = Math.min(Math.max(Number(url.searchParams.get("limit") || 50), 1), 500);
   const offset     = Math.max(Number(url.searchParams.get("offset") || 0), 0);
   const countOnly  = url.searchParams.get("count") === "only";
@@ -53,9 +60,12 @@ export async function GET(req: Request) {
     where.push("(LOWER(c.contact_name) LIKE ? OR LOWER(c.email) LIKE ?)");
     params.push(`%${q}%`, `%${q}%`);
   }
-  if (companyId) {
+  if (companyIds.length === 1) {
     where.push("c.company_id = ?");
-    params.push(companyId);
+    params.push(companyIds[0]);
+  } else if (companyIds.length > 1) {
+    where.push(`c.company_id IN (${companyIds.map(() => "?").join(",")})`);
+    params.push(...companyIds);
   }
   if (segment) {
     where.push("co.segment = ?");

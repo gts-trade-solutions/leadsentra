@@ -44,28 +44,37 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Identity not found" }, { status: 404 });
   }
 
-  // Already verified — short-circuit
-  if (row.status === "verified") {
-    return NextResponse.json({ status: "verified", id: row.id, email: row.email });
-  }
-
-  // No SES configured → dev-mode auto-verify so the rest of the flow works
+  // No SES configured — only auto-verify in local dev.
+  // In production this used to lie and mark the identity 'verified' in the DB,
+  // which made the UI show a green badge while no real sends went out. Now we
+  // surface the actual config gap so it can be fixed.
   if (!isSesConfigured()) {
-    await db.execute(
-      `UPDATE email_identities
-          SET status = 'verified', verified_at = NOW(), updated_at = NOW()
-        WHERE id = ?`,
-      [row.id]
+    if (process.env.NODE_ENV !== "production") {
+      await db.execute(
+        `UPDATE email_identities
+            SET status = 'verified', verified_at = NOW(), updated_at = NOW()
+          WHERE id = ?`,
+        [row.id]
+      );
+      return NextResponse.json({
+        status: "verified",
+        id: row.id,
+        email: row.email,
+        dev: true,
+      });
+    }
+    return NextResponse.json(
+      {
+        error:
+          "SES is not configured. Add AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and SES_REGION (or AWS_REGION) to the production environment and restart.",
+        code: "ses_not_configured",
+      },
+      { status: 503 }
     );
-    return NextResponse.json({
-      status: "verified",
-      id: row.id,
-      email: row.email,
-      dev: true,
-    });
   }
 
-  // Ask SES for the live status
+  // Ask SES for the live verification status, regardless of what the DB cached.
+  // The DB is treated as a derived cache here — SES is the source of truth.
   try {
     const sesStatus = await getIdentityStatus(row.email);
     if (sesStatus !== row.status) {

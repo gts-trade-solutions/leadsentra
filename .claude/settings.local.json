@@ -3,7 +3,10 @@
     "allow": [
       "Bash(git stash *)",
       "Bash(node -e \"console.log\\(require\\('exceljs/package.json'\\).version\\)\")",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(cd /d/leadiq-master && find . -type f -name \"*.tsx\" -o -name \"*.jsx\" | grep -E \"\\(campaign|audience\\)\" | head -20)",
+      "Read(//d/leadiq-master/**)",
+      "PowerShell(Get-ChildItem \"d:\\\\leadiq-master\\\\leadiq-master\\\\app\\\\auth\\\\\" -Recurse | Where-Object {$_.Name -match \"verify|signup\"})"
     ]
   }
 }

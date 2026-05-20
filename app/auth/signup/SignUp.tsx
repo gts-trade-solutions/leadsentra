@@ -66,25 +66,11 @@ export default function SignUpPage() {
 
       setPassword('');
 
-      // Dev-mode: backend returns the OTP when Resend isn't configured.
-      // Stash it so the verify page can show it in a banner.
-      try {
-        if (data?.devCode) {
-          sessionStorage.setItem(
-            'lastDevOtp',
-            JSON.stringify({
-              email,
-              code: String(data.devCode),
-              warning: data?.emailWarning || null,
-            })
-          );
-        }
-      } catch {
-        // sessionStorage can be disabled — ignore
-      }
-
-      // Send the user to the OTP screen with their email pre-filled.
-      router.replace(`/auth/verify?email=${encodeURIComponent(email)}`);
+      // OTP step removed — register now creates the account and sets the
+      // session cookie in one call, so we land the user directly in the
+      // portal. Honor ?next= if a deep link bounced them here.
+      const next = search.get('next') || '/portal/companies';
+      router.replace(next);
     } catch (err: any) {
       setErrorMsg(err?.message ?? 'Unable to sign up. Please try again.');
     } finally {

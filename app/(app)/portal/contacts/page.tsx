@@ -157,6 +157,20 @@ export default function ContactsPage() {
     dateFrom: string;
     dateTo: string;
   }>({ title: "", company: "", status: "all", country: "", segment: "", dateFrom: "", dateTo: "" });
+
+  // Per-column header filters — text "contains" search rendered inline under
+  // each column header (Name / Email / Title / Company / Location / Phone /
+  // Social). Independent of the top-level dropdown filters above, so a user
+  // can combine "Company = Bell Equipment" with "Title contains manager".
+  const [columnFilters, setColumnFilters] = useState<{
+    name: string;
+    email: string;
+    title: string;
+    company: string;
+    location: string;
+    phone: string;
+    social: string;
+  }>({ name: "", email: "", title: "", company: "", location: "", phone: "", social: "" });
   const [sortKey, setSortKey] = useState<
     "name" | "title" | "company" | "location"
   >("name");
@@ -200,6 +214,32 @@ export default function ContactsPage() {
     });
   }
 
+  // Builds a "label + contains filter input" cell for a column header.
+  // Inlined as a const-function (not a component) so React doesn't remount
+  // the input on every parent re-render — that's what was stealing focus
+  // between keystrokes. onMouseDown + onClick stop propagation in case a
+  // sort handler is later wired onto the <th>.
+  const renderFilterHeader = (
+    label: string,
+    field: keyof typeof columnFilters,
+  ): JSX.Element => (
+    <div className="space-y-1.5 min-w-[110px]">
+      <div>{label}</div>
+      <input
+        type="text"
+        value={columnFilters[field]}
+        onChange={(e) =>
+          setColumnFilters((prev) => ({ ...prev, [field]: e.target.value }))
+        }
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        placeholder="Filter…"
+        aria-label={`Filter by ${label.toLowerCase()}`}
+        className="w-full px-2 py-1 text-xs font-normal bg-gray-900 border border-gray-700 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+      />
+    </div>
+  );
+
   // Table headers. The Select column is admin-only (drives bulk-delete);
   // moderators and regular users get a tidier table without checkboxes.
   const headers: (string | JSX.Element)[] = [
@@ -214,13 +254,13 @@ export default function ContactsPage() {
           />,
         ]
       : []),
-    "Name",
-    "Email",
-    "Title",
-    "Company",
-    "Location",
-    "Phone",
-    "Social",
+    renderFilterHeader("Name", "name"),
+    renderFilterHeader("Email", "email"),
+    renderFilterHeader("Title", "title"),
+    renderFilterHeader("Company", "company"),
+    renderFilterHeader("Location", "location"),
+    renderFilterHeader("Phone", "phone"),
+    renderFilterHeader("Social", "social"),
     "Actions",
   ];
 
@@ -331,6 +371,24 @@ export default function ContactsPage() {
   const norm = (v?: string | null) => (v ?? "").toString().trim();
   const includesI = (hay: string, needle: string) =>
     hay.toLowerCase().includes(needle.toLowerCase());
+
+  // Per-column filter matcher. Two modes:
+  //   - "-" (just a hyphen) → row passes only when the field is empty/null.
+  //     Lets users surface contacts missing data (e.g. "no email yet").
+  //   - any other text     → normal case-insensitive contains match.
+  // Whitespace around the filter is ignored. The `-` literal is intentionally
+  // overloaded here for a one-keystroke "show empty" shortcut. If users ever
+  // need to literally search for the hyphen character, they can type "--"
+  // (which will fall into the contains branch since it isn't exactly "-").
+  const matchColumnFilter = (
+    value: string | null | undefined,
+    filter: string,
+  ): boolean => {
+    const trimmed = filter.trim();
+    if (!trimmed) return true;
+    if (trimmed === "-") return !norm(value);
+    return includesI(norm(value), trimmed);
+  };
   const matchesSearch = (r: Row, q = search) => {
     const s = norm(q);
     if (!s) return true;
@@ -529,6 +587,30 @@ export default function ContactsPage() {
     if (filters.status === "unlocked")
       filtered = filtered.filter((r) => r.is_unlocked);
 
+    // Per-column header filters. matchColumnFilter handles both the "-" empty
+    // shortcut and normal contains matching. "Social" is a virtual column —
+    // we join the three social URLs and filter on the combined string, so
+    // "-" passes only rows that have NO linkedin/facebook/instagram link.
+    if (columnFilters.name.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.name, columnFilters.name));
+    if (columnFilters.email.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.email, columnFilters.email));
+    if (columnFilters.title.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.title, columnFilters.title));
+    if (columnFilters.company.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.company, columnFilters.company));
+    if (columnFilters.location.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.location, columnFilters.location));
+    if (columnFilters.phone.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.phone, columnFilters.phone));
+    if (columnFilters.social.trim())
+      filtered = filtered.filter((r) =>
+        matchColumnFilter(
+          [r.linkedin_url, r.facebook_url, r.instagram_url].map(norm).filter(Boolean).join(" "),
+          columnFilters.social,
+        ),
+      );
+
     filtered.sort((a, b) => {
       const av = norm(a[sortKey]).toLowerCase();
       const bv = norm(b[sortKey]).toLowerCase();
@@ -537,7 +619,7 @@ export default function ContactsPage() {
 
     setRows(filtered);
     setPage(1);
-  }, [allRows, search, filters, sortKey, sortDir, popularTitleSet]);
+  }, [allRows, search, filters, columnFilters, sortKey, sortDir, popularTitleSet]);
 
   // Country dropdown options — distinct, sorted.
   const countryOptions = useMemo(
@@ -567,6 +649,7 @@ export default function ContactsPage() {
   const clearFilters = () => {
     setSearch("");
     setFilters({ title: "", company: "", status: "all", country: "", segment: "", dateFrom: "", dateTo: "" });
+    setColumnFilters({ name: "", email: "", title: "", company: "", location: "", phone: "", social: "" });
     setSortKey("name");
     setSortDir("asc");
   };

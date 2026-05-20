@@ -8,6 +8,7 @@ import {
   Instagram,
   Send as TelegramIcon,
   MessageCircle as WhatsAppIcon,
+  BookOpen as MediumIcon,
   Lock,
   Sparkles,
   Upload,
@@ -21,7 +22,7 @@ import SectionHeader from "@/components/SectionHeader";
 import WalletBadge from "@/components/WalletBadge";
 import { toast } from "@/hooks/use-toast";
 
-type Channel = "linkedin" | "facebook" | "instagram" | "telegram" | "whatsapp";
+type Channel = "linkedin" | "facebook" | "instagram" | "telegram" | "whatsapp" | "medium";
 
 type StatusShape = {
   connected: boolean;
@@ -41,7 +42,8 @@ const CHANNELS: { key: Channel; label: string; icon: any; enabled: boolean }[] =
   { key: "facebook",  label: "Facebook",  icon: Facebook,     enabled: true },
   { key: "instagram", label: "Instagram", icon: Instagram,    enabled: true },
   { key: "telegram",  label: "Telegram",  icon: TelegramIcon, enabled: true },
-  { key: "whatsapp",  label: "WhatsApp",  icon: WhatsAppIcon, enabled: false },
+  { key: "whatsapp",  label: "WhatsApp",  icon: WhatsAppIcon, enabled: true },
+  { key: "medium",    label: "Medium",    icon: MediumIcon,   enabled: true },
 ];
 
 const TONES = ["friendly", "professional", "playful", "bold", "informative"] as const;
@@ -78,7 +80,18 @@ const CHANNEL_API: Record<
     // per-user OAuth, so there's no "connect" page to send users to.
     connectUrl: "",
   },
-  whatsapp: { statusUrl: "", postUrl: "", connectUrl: "" },
+  whatsapp: {
+    statusUrl: "/api/social/whatsapp/status",
+    postUrl: "/api/social/whatsapp/post",
+    // WhatsApp Cloud API is also env-var-driven (no per-user OAuth).
+    connectUrl: "",
+  },
+  medium: {
+    statusUrl: "/api/social/medium/status",
+    postUrl: "/api/social/medium/post",
+    // Medium uses a shared integration token (no OAuth flow).
+    connectUrl: "",
+  },
 };
 
 export default function MultiChannelPage() {
@@ -117,13 +130,15 @@ export default function MultiChannelPage() {
     }
   }
 
-  // Initial load: fetch LinkedIn + Facebook + Instagram + Telegram statuses in parallel.
+  // Initial load: fetch every enabled channel's status in parallel.
   useEffect(() => {
     Promise.all([
       refreshStatus("linkedin"),
       refreshStatus("facebook"),
       refreshStatus("instagram"),
       refreshStatus("telegram"),
+      refreshStatus("whatsapp"),
+      refreshStatus("medium"),
     ]);
     // Surface the OAuth callback's redirect signals as toasts.
     const url = new URL(window.location.href);
@@ -570,9 +585,12 @@ export default function MultiChannelPage() {
           )}
 
         {/* Per-channel "why is this disconnected" notice. Surfaces the
-            reason string returned by each channel's status endpoint (used
-            today by Instagram and Telegram). */}
-        {(active === "instagram" || active === "telegram") &&
+            reason string returned by each channel's status endpoint
+            (Instagram, Telegram, WhatsApp, Medium). */}
+        {(active === "instagram" ||
+          active === "telegram" ||
+          active === "whatsapp" ||
+          active === "medium") &&
           !statuses[active]?.connected &&
           statuses[active]?.reason && (
           <div className="rounded-lg border border-amber-700/60 bg-amber-950/30 text-amber-200 p-3 text-sm">

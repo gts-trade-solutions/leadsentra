@@ -34,7 +34,13 @@ export async function POST(req: Request) {
   const search = String(audience?.q || "").trim().toLowerCase();
   const filterSegment   = String(audience?.segment    || "").trim();
   const filterCountry   = String(audience?.country    || "").trim();
-  const filterCompanyId = String(audience?.company_id || "").trim();
+  // company_ids (array, new) takes priority; company_id (single, legacy) is
+  // still honored for backwards compatibility with existing callers.
+  const filterCompanyIds: string[] = Array.isArray(audience?.company_ids)
+    ? audience.company_ids.filter((x: any) => typeof x === "string" && x.trim()).map((x: string) => x.trim())
+    : audience?.company_id
+      ? [String(audience.company_id).trim()].filter(Boolean)
+      : [];
   const explicitIds: string[] = Array.isArray(audience?.contact_ids)
     ? audience.contact_ids.filter((x: any) => typeof x === "string" && x)
     : [];
@@ -69,7 +75,13 @@ export async function POST(req: Request) {
       where.push("(LOWER(c.contact_name) LIKE ? OR LOWER(c.email) LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
     }
-    if (filterCompanyId) { where.push("c.company_id = ?"); params.push(filterCompanyId); }
+    if (filterCompanyIds.length === 1) {
+      where.push("c.company_id = ?");
+      params.push(filterCompanyIds[0]);
+    } else if (filterCompanyIds.length > 1) {
+      where.push(`c.company_id IN (${filterCompanyIds.map(() => "?").join(",")})`);
+      params.push(...filterCompanyIds);
+    }
     if (filterSegment)   { where.push("co.segment = ?");    params.push(filterSegment); }
     if (filterCountry)   { where.push("co.country = ?");    params.push(filterCountry); }
 

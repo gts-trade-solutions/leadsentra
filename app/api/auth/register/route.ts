@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { validatePassword } from "@/lib/password";
-import { sendVerificationOtpEmail, shouldExposeOtpInResponse } from "@/lib/email";
-import { generateOtp, OTP_TTL_MIN } from "@/lib/otp";
+import { signSession, setSessionCookie } from "@/lib/auth";
 import { checkLoginRate, loginRateKey } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const SIGNUP_BONUS_CREDITS = (() => {
+  const n = Number(process.env.SIGNUP_BONUS_CREDITS);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 100;
+})();
 
 function clientIp(req: Request): string {
   const fwd = req.headers.get("x-forwarded-for");
@@ -15,6 +20,18 @@ function clientIp(req: Request): string {
   return req.headers.get("x-real-ip") || "unknown";
 }
 
+/**
+ * POST /api/auth/register
+ *
+ * Creates a user account directly, no email-OTP step. The previous flow
+ * staged the signup in `pending_registrations`, emailed a 6-digit code,
+ * and only promoted to `users` after /api/auth/verify-otp. That dance was
+ * removed at user request — accounts are now usable immediately on submit.
+ *
+ * Trade-off accepted: we no longer prove the user owns the email at signup.
+ * `email_verified` is set to 0 so we can require sender-identity verification
+ * later through SES (separate flow, /api/email/start + /api/email/status).
+ */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const email = String(body.email || "").trim().toLowerCase();
@@ -33,7 +50,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: pwError }, { status: 400 });
   }
 
-  // Throttle so a script can't flood pending_registrations with junk.
+  // Throttle so a script can't flood signups.
   const rate = await checkLoginRate(loginRateKey(`register:${email}`, clientIp(req)));
   if (!rate.ok) {
     return NextResponse.json(
@@ -42,7 +59,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // Refuse if an account with this email is already verified.
   const [existing] = await db.execute(
     "SELECT id FROM users WHERE email = ? LIMIT 1",
     [email]
@@ -54,52 +70,61 @@ export async function POST(req: Request) {
     );
   }
 
-  // Stage the registration.  REPLACE so retrying signup with the same email
-  // (different password / new OTP) supersedes the previous attempt.
+  const id = randomUUID();
   const password_hash = await bcrypt.hash(password, 10);
-  const code = generateOtp();
-  const code_hash = await bcrypt.hash(code, 10);
-  const expires = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000);
 
-  await db.query(
-    `REPLACE INTO pending_registrations
-       (email, password_hash, full_name, code_hash, expires_at, attempts)
-     VALUES (?, ?, ?, ?, ?, 0)`,
-    [email, password_hash, full_name, code_hash, expires]
-  );
-
-  let emailWarning: string | null = null;
+  const conn = await db.getConnection();
   try {
-    const r = await sendVerificationOtpEmail(email, code, OTP_TTL_MIN);
-    if (!r.ok) {
-      emailWarning =
-        r.reason === "not_configured"
-          ? "RESEND_API_KEY is not set — email was not sent."
-          : `Email send failed: ${r.error}`;
+    await conn.beginTransaction();
+
+    await conn.execute(
+      `INSERT INTO users (id, email, password_hash, full_name, role, email_verified)
+       VALUES (?, ?, ?, ?, 'user', 0)`,
+      [id, email, password_hash, full_name]
+    );
+
+    // Seed wallets so spend_credit() and the wallet UI work immediately.
+    await conn.execute(
+      "INSERT IGNORE INTO credits_wallets (user_id, balance) VALUES (?, ?)",
+      [id, SIGNUP_BONUS_CREDITS]
+    );
+    await conn.execute(
+      "INSERT IGNORE INTO wallet (user_id, balance) VALUES (?, ?)",
+      [id, SIGNUP_BONUS_CREDITS]
+    );
+    if (SIGNUP_BONUS_CREDITS > 0) {
+      await conn.execute(
+        `INSERT INTO credits_ledger (user_id, delta, kind, correlation_id, note)
+         VALUES (?, ?, 'credit', ?, 'Signup bonus')`,
+        [id, SIGNUP_BONUS_CREDITS, `signup:${id}`]
+      );
     }
+
+    await conn.commit();
   } catch (e: any) {
-    emailWarning = e?.message || "Email send threw";
-    console.error("[register] sendVerificationOtpEmail threw", e);
+    await conn.rollback();
+    if (e?.code === "ER_DUP_ENTRY") {
+      return NextResponse.json(
+        { error: "An account with that email already exists. Please sign in." },
+        { status: 409 }
+      );
+    }
+    console.error("[register] account create failed", e);
+    return NextResponse.json(
+      { error: "Could not create account. Please try again." },
+      { status: 500 }
+    );
+  } finally {
+    conn.release();
   }
 
-  const body_response: any = {
+  // Auto-sign-in — set the session cookie so the client lands on the portal
+  // already authenticated.
+  const sessionToken = signSession({ id, email, role: "user" });
+  setSessionCookie(sessionToken);
+
+  return NextResponse.json({
     ok: true,
-    email,
-    message:
-      "We emailed a 6-digit code. Enter it on the next screen to finish creating your account.",
-  };
-
-  // Dev-only: include the code in the response so the dev flow isn't blocked
-  // when Resend isn't configured.  Never happens in production.
-  if (shouldExposeOtpInResponse()) {
-    body_response.devCode = code;
-    body_response.message =
-      "Resend isn't configured. We've shown your code below so you can continue testing.";
-  }
-  // Surface email-send errors as a warning so the UI can show "we couldn't send".
-  if (emailWarning && shouldExposeOtpInResponse()) {
-    body_response.emailWarning = emailWarning;
-  }
-
-  return NextResponse.json(body_response);
+    user: { id, email, full_name, role: "user" },
+  });
 }

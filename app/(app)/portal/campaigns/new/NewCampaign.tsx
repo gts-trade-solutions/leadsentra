@@ -1,7 +1,7 @@
 "use client";
 export const dynamic = "force-dynamic";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -9,6 +9,7 @@ import {
   Mail,
   Search,
   ShieldCheck,
+  ShieldAlert,
   RefreshCcw,
   Send,
   Save,
@@ -122,10 +123,26 @@ export default function NewCampaign() {
   // / company).  Combine with `mode: "filtered"` to narrow the send audience.
   const [filterSegment, setFilterSegment] = useState("");
   const [filterCountry, setFilterCountry] = useState("");
-  const [filterCompanyId, setFilterCompanyId] = useState("");
+  const [filterCompanyIds, setFilterCompanyIds] = useState<string[]>([]);
+  const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
+  const [companySearch, setCompanySearch] = useState("");
+  const companyMenuRef = useRef<HTMLDivElement | null>(null);
   const [segmentOptions, setSegmentOptions] = useState<string[]>([]);
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
   const [companyOptions, setCompanyOptions] = useState<{ company_id: string; name: string }[]>([]);
+
+  // Close the multi-select Company dropdown when the user clicks outside it.
+  useEffect(() => {
+    if (!companyMenuOpen) return;
+    function handleDocClick(e: MouseEvent) {
+      const node = companyMenuRef.current;
+      if (node && !node.contains(e.target as Node)) {
+        setCompanyMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleDocClick);
+    return () => document.removeEventListener("mousedown", handleDocClick);
+  }, [companyMenuOpen]);
 
   // Load filter dropdown options once on mount.
   useEffect(() => {
@@ -249,7 +266,8 @@ export default function NewCampaign() {
       u.searchParams.set("count", "only");
       if (filterSegment)   u.searchParams.set("segment", filterSegment);
       if (filterCountry)   u.searchParams.set("country", filterCountry);
-      if (filterCompanyId) u.searchParams.set("company_id", filterCompanyId);
+      // Multi-select: append company_id once per selected id.
+      filterCompanyIds.forEach((id) => u.searchParams.append("company_id", id));
       const res = await fetch(u.toString(), { credentials: "same-origin", cache: "no-store" });
       const data = await res.json().catch(() => ({}));
       setUnlockedTotal(Number(data?.total || 0));
@@ -284,7 +302,7 @@ export default function NewCampaign() {
         if (q) url.searchParams.set("q", q);
         if (filterSegment)   url.searchParams.set("segment", filterSegment);
         if (filterCountry)   url.searchParams.set("country", filterCountry);
-        if (filterCompanyId) url.searchParams.set("company_id", filterCompanyId);
+        filterCompanyIds.forEach((id) => url.searchParams.append("company_id", id));
         const res = await fetch(url.toString(), { credentials: "same-origin", cache: "no-store" });
         const data = await res.json().catch(() => ({}));
         const list: any[] = Array.isArray(data?.contacts) ? data.contacts : [];
@@ -299,7 +317,7 @@ export default function NewCampaign() {
         setRecLoading(false);
       }
     },
-    [filterSegment, filterCountry, filterCompanyId]
+    [filterSegment, filterCountry, filterCompanyIds]
   );
 
   // Reload when search, mode, or any structured filter changes.
@@ -317,7 +335,7 @@ export default function NewCampaign() {
     }, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, recSearch, loadPage, filterSegment, filterCountry, filterCompanyId]);
+  }, [mode, recSearch, loadPage, filterSegment, filterCountry, filterCompanyIds]);
 
   // Hydrate names/emails for the chips shown in "Selected" mode.
   useEffect(() => {
@@ -376,7 +394,7 @@ export default function NewCampaign() {
     }, 400);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, selectedIds, recSearch, adminMode, allContactsTotal, unlockedTotal, filteredTotal, filterSegment, filterCountry, filterCompanyId]);
+  }, [mode, selectedIds, recSearch, adminMode, allContactsTotal, unlockedTotal, filteredTotal, filterSegment, filterCountry, filterCompanyIds]);
 
   const recipientsToSend = adminMode
     ? allContactsTotal
@@ -411,10 +429,12 @@ export default function NewCampaign() {
       return { mode: "admin_all" };
     }
     // Structured filters apply to both 'all' and 'filtered' modes.
-    const filters: Record<string, string> = {};
-    if (filterSegment)   filters.segment   = filterSegment;
-    if (filterCountry)   filters.country   = filterCountry;
-    if (filterCompanyId) filters.company_id = filterCompanyId;
+    // company_ids is an array so the audience picker can target multiple
+    // companies in one campaign.
+    const filters: Record<string, any> = {};
+    if (filterSegment)              filters.segment     = filterSegment;
+    if (filterCountry)              filters.country     = filterCountry;
+    if (filterCompanyIds.length)    filters.company_ids = filterCompanyIds;
 
     if (mode === "selected") {
       return { mode: "selected", contact_ids: Array.from(selectedIds) };
@@ -779,10 +799,22 @@ export default function NewCampaign() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {isVerified && (
+                {/* Verified status badge — green when SES confirms the
+                    identity is ready to send from, red otherwise. The
+                    previous render hid the badge entirely until verified,
+                    so users assumed "no badge = OK" and tried to send. */}
+                {isVerified ? (
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-emerald-900/30 text-emerald-200 border border-emerald-700">
                     <ShieldCheck className="w-3.5 h-3.5" />
                     Verified
+                  </span>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-rose-900/30 text-rose-200 border border-rose-700"
+                    title="This sender hasn't completed SES verification yet — campaigns won't send until it does."
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5" />
+                    Not verified
                   </span>
                 )}
                 {/* Change-sender toggle — visible whether verified or not so the
@@ -1094,24 +1126,85 @@ export default function NewCampaign() {
                   ))}
                 </select>
               </div>
-              <div>
+              <div className="relative" ref={companyMenuRef}>
                 <label className="block text-xs text-gray-400 mb-1">Company</label>
-                <select
-                  value={filterCompanyId}
-                  onChange={(e) => setFilterCompanyId(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"
+                <button
+                  type="button"
+                  onClick={() => setCompanyMenuOpen((o) => !o)}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm text-left flex items-center justify-between gap-2"
+                  aria-haspopup="listbox"
+                  aria-expanded={companyMenuOpen}
                 >
-                  <option value="">All companies</option>
-                  {companyOptions.map((c) => (
-                    <option key={c.company_id} value={c.company_id}>{c.name}</option>
-                  ))}
-                </select>
+                  <span className="truncate">
+                    {filterCompanyIds.length === 0
+                      ? "All companies"
+                      : filterCompanyIds.length === 1
+                      ? companyOptions.find((c) => c.company_id === filterCompanyIds[0])?.name ?? "1 company"
+                      : `${filterCompanyIds.length} companies selected`}
+                  </span>
+                  <span className="text-gray-500">▾</span>
+                </button>
+                {companyMenuOpen && (
+                  <div className="absolute z-30 mt-1 w-full rounded-lg bg-gray-800 border border-gray-700 shadow-xl">
+                    <div className="sticky top-0 p-2 border-b border-gray-700 bg-gray-800 flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={companySearch}
+                        onChange={(e) => setCompanySearch(e.target.value)}
+                        placeholder="Search…"
+                        className="flex-1 px-2 py-1 text-xs bg-gray-900 border border-gray-700 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                      {filterCompanyIds.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setFilterCompanyIds([])}
+                          className="text-xs text-emerald-400 hover:text-emerald-300"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <ul role="listbox" aria-multiselectable className="max-h-60 overflow-y-auto py-1">
+                      {companyOptions
+                        .filter((c) =>
+                          companySearch.trim()
+                            ? c.name.toLowerCase().includes(companySearch.trim().toLowerCase())
+                            : true,
+                        )
+                        .map((c) => {
+                          const checked = filterCompanyIds.includes(c.company_id);
+                          return (
+                            <li key={c.company_id}>
+                              <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-sm text-gray-200">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) =>
+                                    setFilterCompanyIds((prev) =>
+                                      e.target.checked
+                                        ? [...prev, c.company_id]
+                                        : prev.filter((id) => id !== c.company_id),
+                                    )
+                                  }
+                                  className="rounded border-gray-600 bg-gray-900 text-emerald-500 focus:ring-emerald-500"
+                                />
+                                <span className="truncate">{c.name}</span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      {companyOptions.length === 0 && (
+                        <li className="px-3 py-2 text-xs text-gray-500">No companies available</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
               </div>
               <div className="flex items-end">
                 <button
                   type="button"
-                  onClick={() => { setFilterSegment(""); setFilterCountry(""); setFilterCompanyId(""); }}
-                  disabled={!filterSegment && !filterCountry && !filterCompanyId}
+                  onClick={() => { setFilterSegment(""); setFilterCountry(""); setFilterCompanyIds([]); }}
+                  disabled={!filterSegment && !filterCountry && filterCompanyIds.length === 0}
                   className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
                 >
                   Clear filters
