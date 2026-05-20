@@ -86,6 +86,7 @@ export default function MultiChannelPage() {
   const [optimizing, setOptimizing] = useState(false);
   const [posting, setPosting] = useState(false);
   const [generatingImage, setGeneratingImage] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -115,14 +116,54 @@ export default function MultiChannelPage() {
     Promise.all([refreshStatus("linkedin"), refreshStatus("facebook"), refreshStatus("instagram")]);
     // Surface the OAuth callback's redirect signals as toasts.
     const url = new URL(window.location.href);
+    let touched = false;
+
+    // ---- Facebook / Instagram (Meta OAuth) ----
     if (url.searchParams.get("fb_connected")) {
       toast({ title: "Facebook connected", description: "You can now post to Facebook + Instagram." });
-      window.history.replaceState({}, "", url.pathname);
+      touched = true;
     }
-    const err = url.searchParams.get("fb_error");
-    if (err) {
-      toast({ variant: "destructive", title: "Facebook connection failed", description: err });
-      window.history.replaceState({}, "", url.pathname);
+    const fbErr = url.searchParams.get("fb_error");
+    if (fbErr) {
+      toast({ variant: "destructive", title: "Facebook connection failed", description: fbErr });
+      touched = true;
+    }
+
+    // ---- LinkedIn ----
+    if (url.searchParams.get("li_connected")) {
+      toast({ title: "LinkedIn connected", description: "You can now post to LinkedIn." });
+      setActive("linkedin");
+      refreshStatus("linkedin");
+      touched = true;
+    }
+    const liErr = url.searchParams.get("li_error");
+    if (liErr) {
+      const desc = url.searchParams.get("li_error_description") || liErr;
+      toast({ variant: "destructive", title: "LinkedIn connection failed", description: desc });
+      touched = true;
+    }
+
+    if (touched) window.history.replaceState({}, "", url.pathname);
+
+    // ---- Chain resume: if a previous Connect-All set a next provider in
+    // sessionStorage, and we just got a li_/fb_ callback signal, kick off
+    // the next OAuth automatically.
+    const chainRaw = sessionStorage.getItem("connectChain");
+    if (chainRaw && touched) {
+      const queue = chainRaw.split(",").filter(Boolean) as Channel[];
+      const next = queue.shift();
+      if (queue.length) sessionStorage.setItem("connectChain", queue.join(","));
+      else sessionStorage.removeItem("connectChain");
+      const nextUrl = next ? CHANNEL_API[next]?.connectUrl : null;
+      if (next && nextUrl) {
+        toast({
+          title: `Now connecting ${labelOf(next)}…`,
+          description: "Redirecting to the provider.",
+        });
+        setTimeout(() => {
+          window.location.href = nextUrl;
+        }, 1200);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -141,6 +182,38 @@ export default function MultiChannelPage() {
       return;
     }
     window.location.href = url;
+  }
+
+  /**
+   * One-click chained OAuth: kicks off the first missing connect, and uses
+   * sessionStorage to remember the next provider to redirect to once the
+   * first one finishes. Instagram piggybacks on Facebook's OAuth so it's
+   * not part of the chain itself.
+   */
+  function onConnectAll() {
+    const queue: Channel[] = [];
+    if (!statuses.linkedin?.connected) queue.push("linkedin");
+    if (!statuses.facebook?.connected) queue.push("facebook");
+
+    if (queue.length === 0) {
+      toast({ title: "All channels already connected" });
+      return;
+    }
+
+    if (queue.length > 1) {
+      sessionStorage.setItem("connectChain", queue.slice(1).join(","));
+    } else {
+      sessionStorage.removeItem("connectChain");
+    }
+
+    toast({
+      title: queue.length > 1 ? `Connecting ${queue.length} channels…` : `Connecting ${labelOf(queue[0])}…`,
+      description: queue.length > 1 ? "You'll be redirected through each provider." : undefined,
+    });
+
+    setTimeout(() => {
+      window.location.href = CHANNEL_API[queue[0]].connectUrl;
+    }, 400);
   }
 
   async function onDisconnectFacebook() {
@@ -221,48 +294,123 @@ export default function MultiChannelPage() {
     }
   }
 
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setImageUrl(URL.createObjectURL(file));
-    toast({
-      title: "Image attached locally",
-      description: "For Instagram a public https URL is required — cloud upload comes in Phase D.",
-    });
+    // Reset input so the same file can be re-picked after an error.
+    e.target.value = "";
+
+    // Optimistic preview while the cloud upload runs.
+    const localPreview = URL.createObjectURL(file);
+    setImageUrl(localPreview);
+    setUploadingImage(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/uploads/social-image", {
+        method: "POST",
+        credentials: "same-origin",
+        body: fd,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.url) {
+        setImageUrl(null);
+        URL.revokeObjectURL(localPreview);
+        toast({
+          variant: "destructive",
+          title: "Image upload failed",
+          description: j?.error || "Could not upload to storage.",
+        });
+        return;
+      }
+      // Swap the blob: preview for the real public URL the social APIs can fetch.
+      setImageUrl(j.url);
+      URL.revokeObjectURL(localPreview);
+      toast({ title: "Image uploaded", description: "Ready to post to all channels." });
+    } catch (err: any) {
+      setImageUrl(null);
+      URL.revokeObjectURL(localPreview);
+      toast({
+        variant: "destructive",
+        title: "Image upload failed",
+        description: err?.message || "Network error.",
+      });
+    } finally {
+      setUploadingImage(false);
+    }
   }
 
+  // Broadcast: post to every connected channel in parallel. Instagram is
+  // skipped when no image is attached (IG requires media).
   async function onPostNow() {
-    const api = CHANNEL_API[active];
-    if (!api.postUrl) {
-      toast({ variant: "destructive", title: "This channel isn't wired up yet" });
-      return;
-    }
-    if (!statuses[active]?.connected) {
-      toast({ variant: "destructive", title: `Connect ${labelOf(active)} first` });
-      return;
-    }
     if (!post.trim() && !imageUrl) {
       toast({ variant: "destructive", title: "Nothing to post" });
       return;
     }
+
+    const targets = (Object.keys(CHANNEL_API) as Channel[]).filter((c) => {
+      if (!CHANNEL_API[c].postUrl) return false;
+      if (!statuses[c]?.connected) return false;
+      if (c === "instagram" && !imageUrl) return false;
+      return true;
+    });
+
+    if (targets.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "No connected channels",
+        description: "Connect LinkedIn, Facebook, or Instagram first.",
+      });
+      return;
+    }
+
+    if (targets.length < 3 && !statuses.instagram?.connected) {
+      // Surface that IG was skipped only when it was connected but had no image.
+    }
+    if (statuses.instagram?.connected && !imageUrl) {
+      toast({
+        title: "Instagram skipped",
+        description: "Instagram needs an image — attach one to include it.",
+      });
+    }
+
     setPosting(true);
     try {
-      const r = await fetch(api.postUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ text: post, image_url: imageUrl }),
+      const results = await Promise.allSettled(
+        targets.map(async (c) => {
+          const r = await fetch(CHANNEL_API[c].postUrl, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ text: post, image_url: imageUrl }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j?.error || `Post failed (${r.status})`);
+          return c;
+        }),
+      );
+
+      const ok: Channel[] = [];
+      const failed: { channel: Channel; error: string }[] = [];
+      results.forEach((res, i) => {
+        const c = targets[i];
+        if (res.status === "fulfilled") ok.push(c);
+        else failed.push({ channel: c, error: (res.reason as Error)?.message || "Unknown error" });
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
+
+      if (ok.length) {
+        toast({
+          title: `Posted to ${ok.map(labelOf).join(", ")}`,
+          description: failed.length ? `${failed.length} channel(s) failed — see below.` : undefined,
+        });
+      }
+      failed.forEach((f) =>
         toast({
           variant: "destructive",
-          title: r.status === 501 ? "Posting coming soon" : "Post failed",
-          description: j?.error || "",
-        });
-        return;
-      }
-      toast({ title: `Posted to ${labelOf(active)}` });
+          title: `${labelOf(f.channel)} failed`,
+          description: f.error,
+        }),
+      );
     } finally {
       setPosting(false);
     }
@@ -271,6 +419,25 @@ export default function MultiChannelPage() {
   const channelLabel = useMemo(() => labelOf(active), [active]);
   const activeStatus = statuses[active];
   const fbStatus = statuses.facebook;
+
+  // How many of the chain-eligible providers still need OAuth (IG piggybacks on FB).
+  const missingConnectCount = useMemo(
+    () =>
+      (["linkedin", "facebook"] as Channel[]).filter((c) => !statuses[c]?.connected).length,
+    [statuses],
+  );
+
+  // Channels the next click would broadcast to (mirrors onPostNow's filter).
+  const broadcastTargets = useMemo<Channel[]>(
+    () =>
+      (Object.keys(CHANNEL_API) as Channel[]).filter((c) => {
+        if (!CHANNEL_API[c].postUrl) return false;
+        if (!statuses[c]?.connected) return false;
+        if (c === "instagram" && !imageUrl) return false;
+        return true;
+      }),
+    [statuses, imageUrl],
+  );
 
   const someDisabledExist = CHANNELS.some((c) => !c.enabled);
 
@@ -342,6 +509,16 @@ export default function MultiChannelPage() {
                 "Not connected"
               )}
             </span>
+            {missingConnectCount > 0 && (
+              <button
+                onClick={onConnectAll}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium"
+                title="Connect every channel you haven't authorised yet, one after another"
+              >
+                <Sparkles className="w-4 h-4" />
+                Connect all ({missingConnectCount})
+              </button>
+            )}
             <button
               onClick={() => refreshStatus(active)}
               disabled={statusLoading}
@@ -457,27 +634,66 @@ export default function MultiChannelPage() {
                   {post.trim() ? post : "Your content will appear here…"}
                 </div>
               </div>
-              <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="text-sm text-gray-300">Review and post.</div>
-                {activeStatus?.connected ? (
-                  <button
-                    onClick={onPostNow}
-                    disabled={posting}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-60"
-                  >
-                    <ChannelIcon channel={active} className="w-4 h-4" />
-                    {posting ? "Posting…" : `Post to ${channelLabel}`}
-                  </button>
-                ) : (
-                  <button
-                    onClick={onConnect}
-                    disabled={!CHANNEL_API[active].connectUrl}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-60"
-                  >
-                    <ChannelIcon channel={active} className="w-4 h-4" />
-                    Connect {channelLabel}
-                  </button>
-                )}
+              <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 flex flex-col gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="text-sm text-gray-300">
+                    {broadcastTargets.length > 0 ? (
+                      <>
+                        Will post to{" "}
+                        <span className="text-white font-medium">
+                          {broadcastTargets.map(labelOf).join(", ")}
+                        </span>
+                        .
+                      </>
+                    ) : activeStatus?.connected ? (
+                      "Review and post."
+                    ) : (
+                      `Connect ${channelLabel} to start broadcasting.`
+                    )}
+                  </div>
+                  {broadcastTargets.length > 0 ? (
+                    <button
+                      onClick={onPostNow}
+                      disabled={posting || uploadingImage}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-60"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      {uploadingImage
+                        ? "Uploading image…"
+                        : posting
+                        ? `Posting to ${broadcastTargets.length}…`
+                        : `Post to ${broadcastTargets.length} channel${broadcastTargets.length > 1 ? "s" : ""}`}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={onConnect}
+                      disabled={!CHANNEL_API[active].connectUrl}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-60"
+                    >
+                      <ChannelIcon channel={active} className="w-4 h-4" />
+                      Connect {channelLabel}
+                    </button>
+                  )}
+                </div>
+
+                {/* Secondary connect prompt when the active tab's channel
+                    isn't connected yet but other channels are. */}
+                {broadcastTargets.length > 0 &&
+                  !activeStatus?.connected &&
+                  CHANNEL_API[active].connectUrl && (
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-800 text-xs">
+                      <span className="text-gray-400">
+                        {channelLabel} is not connected — it won't receive this post.
+                      </span>
+                      <button
+                        onClick={onConnect}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/30"
+                      >
+                        <ChannelIcon channel={active} className="w-3.5 h-3.5" />
+                        Connect {channelLabel}
+                      </button>
+                    </div>
+                  )}
               </div>
             </div>
           </div>
@@ -494,10 +710,11 @@ export default function MultiChannelPage() {
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
                   onClick={() => fileRef.current?.click()}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-600/60 text-emerald-300 hover:bg-emerald-900/30 text-sm"
+                  disabled={uploadingImage}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-600/60 text-emerald-300 hover:bg-emerald-900/30 text-sm disabled:opacity-60"
                 >
                   <Upload className="w-4 h-4" />
-                  Upload
+                  {uploadingImage ? "Uploading…" : "Upload"}
                 </button>
                 <button
                   onClick={onGenerateImage}
