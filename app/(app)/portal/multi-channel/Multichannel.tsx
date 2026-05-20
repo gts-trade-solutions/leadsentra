@@ -40,7 +40,7 @@ const CHANNELS: { key: Channel; label: string; icon: any; enabled: boolean }[] =
   { key: "linkedin",  label: "LinkedIn",  icon: Linkedin,     enabled: true },
   { key: "facebook",  label: "Facebook",  icon: Facebook,     enabled: true },
   { key: "instagram", label: "Instagram", icon: Instagram,    enabled: true },
-  { key: "telegram",  label: "Telegram",  icon: TelegramIcon, enabled: false },
+  { key: "telegram",  label: "Telegram",  icon: TelegramIcon, enabled: true },
   { key: "whatsapp",  label: "WhatsApp",  icon: WhatsAppIcon, enabled: false },
 ];
 
@@ -71,7 +71,13 @@ const CHANNEL_API: Record<
     postUrl: "/api/social/instagram/post",
     connectUrl: "/api/facebook/start", // IG piggybacks on the Meta OAuth
   },
-  telegram: { statusUrl: "", postUrl: "", connectUrl: "" },
+  telegram: {
+    statusUrl: "/api/social/telegram/status",
+    postUrl: "/api/social/telegram/post",
+    // Telegram uses a shared bot + channel configured via env vars — no
+    // per-user OAuth, so there's no "connect" page to send users to.
+    connectUrl: "",
+  },
   whatsapp: { statusUrl: "", postUrl: "", connectUrl: "" },
 };
 
@@ -111,9 +117,14 @@ export default function MultiChannelPage() {
     }
   }
 
-  // Initial load: fetch LinkedIn + Facebook + Instagram statuses in parallel.
+  // Initial load: fetch LinkedIn + Facebook + Instagram + Telegram statuses in parallel.
   useEffect(() => {
-    Promise.all([refreshStatus("linkedin"), refreshStatus("facebook"), refreshStatus("instagram")]);
+    Promise.all([
+      refreshStatus("linkedin"),
+      refreshStatus("facebook"),
+      refreshStatus("instagram"),
+      refreshStatus("telegram"),
+    ]);
     // Surface the OAuth callback's redirect signals as toasts.
     const url = new URL(window.location.href);
     let touched = false;
@@ -455,7 +466,7 @@ export default function MultiChannelPage() {
           <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 text-amber-200 p-3 text-sm flex items-start gap-2">
             <Lock className="w-4 h-4 mt-0.5 shrink-0" />
             <span>
-              Telegram and WhatsApp are still locked.{" "}
+              WhatsApp is still locked.{" "}
               <a href="mailto:info@raceinnovations.in" className="underline">Contact us</a> to enable them.
             </span>
           </div>
@@ -558,10 +569,14 @@ export default function MultiChannelPage() {
             </div>
           )}
 
-        {/* Instagram-specific notice when FB is connected but the Page has no IG link */}
-        {active === "instagram" && !statuses.instagram?.connected && statuses.instagram?.reason && (
+        {/* Per-channel "why is this disconnected" notice. Surfaces the
+            reason string returned by each channel's status endpoint (used
+            today by Instagram and Telegram). */}
+        {(active === "instagram" || active === "telegram") &&
+          !statuses[active]?.connected &&
+          statuses[active]?.reason && (
           <div className="rounded-lg border border-amber-700/60 bg-amber-950/30 text-amber-200 p-3 text-sm">
-            {statuses.instagram.reason}
+            {statuses[active]!.reason}
           </div>
         )}
 
