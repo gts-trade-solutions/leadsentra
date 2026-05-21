@@ -366,20 +366,45 @@ export default function MultiChannelPage() {
     }
   }
 
-  // Broadcast: post to every connected channel in parallel. Instagram is
-  // skipped when no image is attached (IG requires media).
-  async function onPostNow() {
+  // Post handler. Called with `target = "all"` to broadcast to every
+  // connected channel (the big primary button), or with a specific Channel
+  // to send to just that one (the per-channel "send only this" buttons).
+  // The body of this function is shared between both modes — the only
+  // difference is the targets list.
+  async function onPostNow(target: Channel | "all" = "all") {
     if (!post.trim() && !imageUrl) {
       toast({ variant: "destructive", title: "Nothing to post" });
       return;
     }
 
-    const targets = (Object.keys(CHANNEL_API) as Channel[]).filter((c) => {
-      if (!CHANNEL_API[c].postUrl) return false;
-      if (!statuses[c]?.connected) return false;
-      if (c === "instagram" && !imageUrl) return false;
-      return true;
-    });
+    let targets: Channel[];
+    if (target === "all") {
+      targets = (Object.keys(CHANNEL_API) as Channel[]).filter((c) => {
+        if (!CHANNEL_API[c].postUrl) return false;
+        if (!statuses[c]?.connected) return false;
+        if (c === "instagram" && !imageUrl) return false;
+        return true;
+      });
+    } else {
+      // Single-channel mode — validate the one chosen channel is usable.
+      if (!CHANNEL_API[target].postUrl) {
+        toast({ variant: "destructive", title: `${labelOf(target)} isn't wired up yet` });
+        return;
+      }
+      if (!statuses[target]?.connected) {
+        toast({ variant: "destructive", title: `Connect ${labelOf(target)} first` });
+        return;
+      }
+      if (target === "instagram" && !imageUrl) {
+        toast({
+          variant: "destructive",
+          title: "Instagram needs an image",
+          description: "Attach an image before posting to Instagram.",
+        });
+        return;
+      }
+      targets = [target];
+    }
 
     if (targets.length === 0) {
       toast({
@@ -390,10 +415,9 @@ export default function MultiChannelPage() {
       return;
     }
 
-    if (targets.length < 3 && !statuses.instagram?.connected) {
-      // Surface that IG was skipped only when it was connected but had no image.
-    }
-    if (statuses.instagram?.connected && !imageUrl) {
+    // Broadcast-mode-only courtesy notice when IG was connected but skipped
+    // for lack of image. Single-channel IG sends already errored above.
+    if (target === "all" && statuses.instagram?.connected && !imageUrl) {
       toast({
         title: "Instagram skipped",
         description: "Instagram needs an image — attach one to include it.",
@@ -684,20 +708,21 @@ export default function MultiChannelPage() {
                       `Connect ${channelLabel} to start broadcasting.`
                     )}
                   </div>
-                  {broadcastTargets.length > 0 ? (
+                  {broadcastTargets.length > 1 ? (
                     <button
-                      onClick={onPostNow}
+                      onClick={() => onPostNow("all")}
                       disabled={posting || uploadingImage}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium disabled:opacity-60"
+                      title="Post to every connected channel in one click"
                     >
                       <Sparkles className="w-4 h-4" />
                       {uploadingImage
                         ? "Uploading image…"
                         : posting
                         ? `Posting to ${broadcastTargets.length}…`
-                        : `Post to ${broadcastTargets.length} channel${broadcastTargets.length > 1 ? "s" : ""}`}
+                        : `Post to all ${broadcastTargets.length} channels`}
                     </button>
-                  ) : (
+                  ) : broadcastTargets.length === 0 ? (
                     <button
                       onClick={onConnect}
                       disabled={!CHANNEL_API[active].connectUrl}
@@ -706,8 +731,36 @@ export default function MultiChannelPage() {
                       <ChannelIcon channel={active} className="w-4 h-4" />
                       Connect {channelLabel}
                     </button>
-                  )}
+                  ) : null}
                 </div>
+
+                {/* Per-channel send buttons — lets the user post to one
+                    channel only, without firing the group broadcast. The
+                    "Post to all" button above remains the primary CTA when
+                    more than one channel is connected. */}
+                {broadcastTargets.length > 0 && (
+                  <div className="pt-2 border-t border-gray-800">
+                    <div className="text-xs text-gray-500 mb-2">
+                      {broadcastTargets.length > 1
+                        ? "Or send to just one channel:"
+                        : "Send to:"}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {broadcastTargets.map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => onPostNow(c)}
+                          disabled={posting || uploadingImage}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50"
+                          title={`Send to ${labelOf(c)} only`}
+                        >
+                          <ChannelIcon channel={c} className="w-3.5 h-3.5" />
+                          Post to {labelOf(c)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Secondary connect prompt when the active tab's channel
                     isn't connected yet but other channels are. */}

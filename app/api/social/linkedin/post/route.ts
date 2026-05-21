@@ -125,10 +125,20 @@ export async function POST(req: Request) {
   let respJson: any = null;
   try { respJson = JSON.parse(respText); } catch { /* leave null */ }
 
+  // Log the raw LinkedIn response so we can diagnose silent suppressions —
+  // LinkedIn sometimes returns 200/201 OK while filtering the post out of
+  // feeds (their spam/duplicate classifier). Looking at the headers and
+  // body in server logs is the only way to tell.
+  console.log(
+    `[linkedin/post] status=${resp.status} ` +
+    `x-restli-id="${resp.headers.get("x-restli-id") ?? ""}" ` +
+    `body=${respText.slice(0, 500)}`
+  );
+
   if (!resp.ok) {
     return NextResponse.json(
-      { error: respJson?.message || respText || "LinkedIn post failed" },
-      { status: 502 }
+      { error: friendlyLinkedInError(resp.status, respJson, respText) },
+      { status: resp.status === 429 ? 429 : 502 }
     );
   }
 
@@ -136,6 +146,20 @@ export async function POST(req: Request) {
     resp.headers.get("x-restli-id") ||
     respJson?.id ||
     null;
+
+  // Treat a 200/201 with no URN as a silent suppression — LinkedIn's API
+  // sometimes accepts the request without actually creating a feed post
+  // (duplicate detection on the soft path, or spam classifier). Better to
+  // tell the user up front than show a misleading green toast.
+  if (!liUrn) {
+    return NextResponse.json(
+      {
+        error:
+          "LinkedIn accepted the request but didn't return a post id — usually means the post was silently filtered (duplicate / spam classifier). Try editing the text and resending.",
+      },
+      { status: 502 }
+    );
+  }
 
   try {
     await db.execute(
@@ -154,7 +178,43 @@ export async function POST(req: Request) {
     // Logging failure shouldn't break a successful publish.
   }
 
-  return NextResponse.json({ ok: true, id: liUrn });
+  // Build a direct view URL the caller can show / click to confirm the
+  // post exists on LinkedIn. Shape:
+  //   urn:li:share:7234567890   → /feed/update/urn:li:share:7234567890/
+  //   urn:li:ugcPost:7234...    → /feed/update/urn:li:ugcPost:7234.../
+  const viewUrl = `https://www.linkedin.com/feed/update/${encodeURIComponent(liUrn)}/`;
+
+  return NextResponse.json({ ok: true, id: liUrn, url: viewUrl });
+}
+
+/**
+ * Translates LinkedIn's raw error responses into messages the user can
+ * actually act on. Falls back to the original message if nothing matches.
+ */
+function friendlyLinkedInError(
+  status: number,
+  json: any,
+  text: string,
+): string {
+  const raw = String(json?.message || text || "").toLowerCase();
+
+  if (raw.includes("duplicate") || raw.includes("content is a duplicate")) {
+    return "LinkedIn rejected this as a duplicate of a recent post. Tweak the wording slightly (a few words is enough) and try again.";
+  }
+  if (status === 401 || raw.includes("invalid_token") || raw.includes("token") && raw.includes("expired")) {
+    return "LinkedIn session expired. Disconnect and reconnect LinkedIn to refresh the token.";
+  }
+  if (status === 403 || raw.includes("not enough permissions") || raw.includes("does not have permission")) {
+    return "LinkedIn token is missing the w_member_social scope. Reconnect LinkedIn — the app's Products tab must include 'Share on LinkedIn'.";
+  }
+  if (status === 422 && raw.includes("unprocessable")) {
+    return "LinkedIn couldn't process the post — usually means the text or image is malformed. Try a shorter text or a different image.";
+  }
+  if (status === 429) {
+    return "LinkedIn rate limit hit. Wait a minute before posting again.";
+  }
+  // Fall back to whatever LinkedIn gave us — keep it useful, not a Java trace.
+  return json?.message || text || `LinkedIn post failed (${status})`;
 }
 
 /**
