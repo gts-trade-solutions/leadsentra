@@ -2108,6 +2108,9 @@ function AddCompanyModal({
         setTouched({ id: true, name: true });
         throw new Error("Company Name is required");
       }
+      // Send the full form. The server saves the columns it has direct
+      // mappings for and stores the rest in the meta JSON column so the
+      // values don't get dropped on the floor.
       const payload = {
         code: form.company_id.trim() || undefined,  // server auto-generates if blank
         name: form.company_name.trim(),
@@ -2117,6 +2120,17 @@ function AddCompanyModal({
         website: form.website || null,
         linkedin: form.linkedin || null,
         country: form.country || null,
+        city_regency: form.city_regency || null,
+        phone_main: form.phone_main || null,
+        legal_name: form.legal_name || null,
+        trading_name: form.trading_name || null,
+        head_office_address: form.head_office_address || null,
+        postal_code: form.postal_code || null,
+        email_general: form.email_general || null,
+        notes: form.notes || null,
+        company_profile: form.company_profile || null,
+        financial_reports: form.financial_reports || null,
+        forecast_value: form.forecast_value || null,
       };
       const res = await fetch("/api/companies", {
         method: "POST",

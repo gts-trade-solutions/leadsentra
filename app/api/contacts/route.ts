@@ -69,6 +69,11 @@ export async function GET(req: Request) {
     ? ""
     : "LEFT JOIN unlocked_contacts uc ON uc.contact_id = c.id AND uc.user_id = ?";
 
+  // location / department / notes / facebook_url / instagram_url live inside
+  // the `meta` JSON column (POST handler stuffs them there). Extract them
+  // here so the contacts page can display them as proper columns instead of
+  // dashes. JSON_UNQUOTE turns a JSON-null into a SQL NULL — exactly what
+  // the UI's optional fields expect.
   const sql = `SELECT
         c.id,
         c.contact_name AS name,
@@ -76,6 +81,11 @@ export async function GET(req: Request) {
         c.email,
         c.phone,
         c.linkedin_url,
+        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.location'))      AS location,
+        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.department'))    AS department,
+        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.notes'))         AS notes,
+        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.facebook_url'))  AS facebook_url,
+        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.instagram_url')) AS instagram_url,
         co.company_name AS company,
         co.country     AS country,
         co.segment     AS segment,

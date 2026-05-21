@@ -127,7 +127,7 @@ export async function GET(req: Request) {
       randomUUID(),
       userId,
       longToken,
-      "pages_show_list,pages_manage_posts,instagram_basic,instagram_content_publish",
+      "pages_show_list,pages_read_engagement,instagram_basic,instagram_business_content_publish,business_management",
       expiresAt,
       me.id,
       pageIdsJson,

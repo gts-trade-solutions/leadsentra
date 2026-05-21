@@ -144,35 +144,61 @@ export default function NewCampaign() {
     return () => document.removeEventListener("mousedown", handleDocClick);
   }, [companyMenuOpen]);
 
-  // Load filter dropdown options once on mount.
-  useEffect(() => {
-    (async () => {
-      try {
-        const [segResp, compResp] = await Promise.all([
-          fetch("/api/companies/segments", { credentials: "same-origin", cache: "no-store" }),
-          fetch("/api/companies", { credentials: "same-origin", cache: "no-store" }),
-        ]);
-        const segJson = await segResp.json().catch(() => ({}));
-        const compJson = await compResp.json().catch(() => ({}));
-        setSegmentOptions(Array.isArray(segJson?.segments) ? segJson.segments : []);
-        const companies = Array.isArray(compJson?.data) ? compJson.data : [];
-        setCompanyOptions(
+  // Filter dropdown loader. Extracted as a useCallback so we can refresh
+  // these lists whenever the user returns to this page (after adding a
+  // company / contact elsewhere) — previously it only ran once on mount
+  // and newly added rows didn't appear in the dropdowns.
+  const refreshFilterOptions = useCallback(async () => {
+    try {
+      const [segResp, compResp] = await Promise.all([
+        fetch("/api/companies/segments", { credentials: "same-origin", cache: "no-store" }),
+        fetch("/api/companies", { credentials: "same-origin", cache: "no-store" }),
+      ]);
+      const segJson = await segResp.json().catch(() => ({}));
+      const compJson = await compResp.json().catch(() => ({}));
+      setSegmentOptions(Array.isArray(segJson?.segments) ? segJson.segments : []);
+      const companies = Array.isArray(compJson?.data) ? compJson.data : [];
+      setCompanyOptions(
+        companies
+          .map((c: any) => ({ company_id: c.company_id, name: c.name || c.company_name || c.company_id }))
+          .sort((a: any, b: any) => a.name.localeCompare(b.name))
+      );
+      const countries = Array.from(
+        new Set(
           companies
-            .map((c: any) => ({ company_id: c.company_id, name: c.name || c.company_name || c.company_id }))
-            .sort((a: any, b: any) => a.name.localeCompare(b.name))
-        );
-        // Derive country list from the same companies payload (distinct, sorted).
-        const countries = Array.from(
-          new Set(
-            companies
-              .map((c: any) => String(c.country || "").trim())
-              .filter(Boolean)
-          )
-        ).sort((a, b) => a.localeCompare(b));
-        setCountryOptions(countries);
-      } catch { /* leave dropdowns empty on failure */ }
-    })();
+            .map((c: any) => String(c.country || "").trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b));
+      setCountryOptions(countries);
+    } catch {
+      /* leave dropdowns empty on failure */
+    }
   }, []);
+
+  useEffect(() => {
+    refreshFilterOptions();
+  }, [refreshFilterOptions]);
+
+  // Refresh filter dropdowns + recipient list whenever the user returns to
+  // this tab/page. Catches the common flow of "add contact on /contacts →
+  // come back to /campaigns/new and expect the new row to be there".
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        refreshFilterOptions();
+        loadCount();
+        if (mode !== "all") loadPage(0, recSearch.trim().toLowerCase(), true);
+      }
+    }
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, recSearch]);
 
   // Re-run deliverability diagnostics whenever the sender changes.  The
   // server-side endpoint returns a list of pass/warn/fail findings + a score.
@@ -1200,14 +1226,29 @@ export default function NewCampaign() {
                   </div>
                 )}
               </div>
-              <div className="flex items-end">
+              <div className="flex items-end gap-2">
                 <button
                   type="button"
                   onClick={() => { setFilterSegment(""); setFilterCountry(""); setFilterCompanyIds([]); }}
                   disabled={!filterSegment && !filterCountry && filterCompanyIds.length === 0}
-                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
+                  className="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
                 >
                   Clear filters
+                </button>
+                {/* Manual refresh — pulls fresh companies, segments, and the
+                    recipients list. Useful when the user just added a contact
+                    or company in another tab and wants it to appear here. */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await refreshFilterOptions();
+                    await loadCount();
+                    if (mode !== "all") loadPage(0, recSearch.trim().toLowerCase(), true);
+                  }}
+                  className="px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600"
+                  title="Reload contacts and companies"
+                >
+                  <RefreshCcw className="w-4 h-4" />
                 </button>
               </div>
             </div>

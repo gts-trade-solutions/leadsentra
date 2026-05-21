@@ -36,10 +36,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Fields that have proper SQL columns. Everything else (legal_name,
+  // trading_name, head_office_address, postal_code, email_general, notes,
+  // company_profile, financial_reports, forecast_value) is stored in the
+  // meta JSON column so the form's full payload survives a round-trip.
+  const meta: Record<string, any> = {};
+  for (const key of [
+    "legal_name",
+    "trading_name",
+    "head_office_address",
+    "postal_code",
+    "email_general",
+    "notes",
+    "company_profile",
+    "financial_reports",
+    "forecast_value",
+  ] as const) {
+    const v = normStr((body as any)[key]);
+    if (v !== null) meta[key] = v;
+  }
+
   await db.query(
     `INSERT INTO companies
-       (company_id, user_id, company_name, industry, segment, size, website, linkedin, country)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (company_id, user_id, company_name, industry, segment, size,
+        website, linkedin, country, city_regency, phone_main, meta)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON))`,
     [
       company_id,
       session.id,
@@ -50,6 +71,9 @@ export async function POST(req: NextRequest) {
       normStr(body.website),
       normStr(body.linkedin),
       normStr(body.country),
+      normStr(body.city_regency),
+      normStr(body.phone_main),
+      Object.keys(meta).length ? JSON.stringify(meta) : null,
     ]
   );
 

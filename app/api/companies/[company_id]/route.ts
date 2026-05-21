@@ -28,6 +28,7 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
   const sets: string[] = [];
   const vals: any[] = [];
 
+  // Direct column updates.
   const map: Record<string, string> = {
     name: "company_name",
     type: "industry",
@@ -50,6 +51,33 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
       sets.push(`${col} = ?`);
       vals.push(v === "" ? null : v);
     }
+  }
+
+  // Meta JSON updates — same pattern as the contacts PATCH. Patches only
+  // the keys the caller sent, preserving any other keys already in meta.
+  const metaKeys = [
+    "legal_name",
+    "trading_name",
+    "head_office_address",
+    "postal_code",
+    "email_general",
+    "notes",
+    "company_profile",
+    "financial_reports",
+    "forecast_value",
+  ] as const;
+  const metaPairs: string[] = [];
+  const metaVals: any[] = [];
+  for (const key of metaKeys) {
+    if (key in body) {
+      const v = typeof (body as any)[key] === "string" ? (body as any)[key].trim() : (body as any)[key];
+      metaPairs.push(`'$.${key}', ?`);
+      metaVals.push(v === "" ? null : v);
+    }
+  }
+  if (metaPairs.length) {
+    sets.push(`meta = JSON_SET(COALESCE(meta, JSON_OBJECT()), ${metaPairs.join(", ")})`);
+    vals.push(...metaVals);
   }
 
   if (!sets.length) {

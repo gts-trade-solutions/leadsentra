@@ -6,7 +6,8 @@
       "Bash(git check-ignore *)",
       "Bash(cd /d/leadiq-master && find . -type f -name \"*.tsx\" -o -name \"*.jsx\" | grep -E \"\\(campaign|audience\\)\" | head -20)",
       "Read(//d/leadiq-master/**)",
-      "PowerShell(Get-ChildItem \"d:\\\\leadiq-master\\\\leadiq-master\\\\app\\\\auth\\\\\" -Recurse | Where-Object {$_.Name -match \"verify|signup\"})"
+      "PowerShell(Get-ChildItem \"d:\\\\leadiq-master\\\\leadiq-master\\\\app\\\\auth\\\\\" -Recurse | Where-Object {$_.Name -match \"verify|signup\"})",
+      "Bash(grep -l \"ADD COLUMN segment\\\\|segment.*VARCHAR\\\\|companies.*segment\" \"d:\\\\\\\\leadiq-master\\\\\\\\leadiq-master\\\\\\\\migrations\"/*.sql)"
     ]
   }
 }

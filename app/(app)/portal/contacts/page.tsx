@@ -51,6 +51,10 @@ type Row = {
   email: string | null;
   phone: string | null;
   location: string | null;
+  // Extracted from contacts.meta JSON by the GET /api/contacts query so the
+  // table can display the columns the CSV upload template asks for.
+  department: string | null;
+  notes: string | null;
   country: string | null;        // joined from companies.country
   segment: string | null;        // joined from companies.segment
   created_at?: string | null;    // ISO timestamp
@@ -162,15 +166,26 @@ export default function ContactsPage() {
   // each column header (Name / Email / Title / Company / Location / Phone /
   // Social). Independent of the top-level dropdown filters above, so a user
   // can combine "Company = Bell Equipment" with "Title contains manager".
+  // Per-column filters match the CSV upload template exactly:
+  //   company_id, contact_name, title, email, phone, linkedin_url
+  // Anything not in the template (department, location, notes, social) was
+  // removed from the table headers — those fields still exist in the DB and
+  // in the add/edit modals, just not as table columns/filters.
   const [columnFilters, setColumnFilters] = useState<{
     name: string;
     email: string;
     title: string;
     company: string;
-    location: string;
     phone: string;
-    social: string;
-  }>({ name: "", email: "", title: "", company: "", location: "", phone: "", social: "" });
+    linkedin_url: string;
+  }>({
+    name: "",
+    email: "",
+    title: "",
+    company: "",
+    phone: "",
+    linkedin_url: "",
+  });
   const [sortKey, setSortKey] = useState<
     "name" | "title" | "company" | "location"
   >("name");
@@ -258,9 +273,8 @@ export default function ContactsPage() {
     renderFilterHeader("Email", "email"),
     renderFilterHeader("Title", "title"),
     renderFilterHeader("Company", "company"),
-    renderFilterHeader("Location", "location"),
     renderFilterHeader("Phone", "phone"),
-    renderFilterHeader("Social", "social"),
+    renderFilterHeader("LinkedIn URL", "linkedin_url"),
     "Actions",
   ];
 
@@ -422,6 +436,9 @@ export default function ContactsPage() {
         email: c.email ?? null,
         phone: c.phone ?? null,
         location: c.location ?? null,
+        // Fields extracted from contacts.meta JSON by the API.
+        department: c.department ?? null,
+        notes: c.notes ?? null,
         country: c.country ?? null,
         segment: c.segment ?? null,
         created_at: c.created_at ?? null,
@@ -588,9 +605,8 @@ export default function ContactsPage() {
       filtered = filtered.filter((r) => r.is_unlocked);
 
     // Per-column header filters. matchColumnFilter handles both the "-" empty
-    // shortcut and normal contains matching. "Social" is a virtual column —
-    // we join the three social URLs and filter on the combined string, so
-    // "-" passes only rows that have NO linkedin/facebook/instagram link.
+    // shortcut and normal contains matching. Columns mirror the CSV template:
+    //   company_id, contact_name, title, email, phone, linkedin_url
     if (columnFilters.name.trim())
       filtered = filtered.filter((r) => matchColumnFilter(r.name, columnFilters.name));
     if (columnFilters.email.trim())
@@ -599,17 +615,10 @@ export default function ContactsPage() {
       filtered = filtered.filter((r) => matchColumnFilter(r.title, columnFilters.title));
     if (columnFilters.company.trim())
       filtered = filtered.filter((r) => matchColumnFilter(r.company, columnFilters.company));
-    if (columnFilters.location.trim())
-      filtered = filtered.filter((r) => matchColumnFilter(r.location, columnFilters.location));
     if (columnFilters.phone.trim())
       filtered = filtered.filter((r) => matchColumnFilter(r.phone, columnFilters.phone));
-    if (columnFilters.social.trim())
-      filtered = filtered.filter((r) =>
-        matchColumnFilter(
-          [r.linkedin_url, r.facebook_url, r.instagram_url].map(norm).filter(Boolean).join(" "),
-          columnFilters.social,
-        ),
-      );
+    if (columnFilters.linkedin_url.trim())
+      filtered = filtered.filter((r) => matchColumnFilter(r.linkedin_url, columnFilters.linkedin_url));
 
     filtered.sort((a, b) => {
       const av = norm(a[sortKey]).toLowerCase();
@@ -649,7 +658,7 @@ export default function ContactsPage() {
   const clearFilters = () => {
     setSearch("");
     setFilters({ title: "", company: "", status: "all", country: "", segment: "", dateFrom: "", dateTo: "" });
-    setColumnFilters({ name: "", email: "", title: "", company: "", location: "", phone: "", social: "" });
+    setColumnFilters({ name: "", email: "", title: "", company: "", phone: "", linkedin_url: "" });
     setSortKey("name");
     setSortDir("asc");
   };
@@ -1385,17 +1394,30 @@ export default function ContactsPage() {
               ),
               title: r.title || "—",
               company: r.company || "—",
-              location: r.is_unlocked ? (
-                r.location || "—"
-              ) : (
-                <span className="text-gray-400">••••••••••</span>
-              ),
               phone: r.is_unlocked ? (
                 r.phone || "—"
               ) : (
                 <span className="text-gray-400">••••••••••</span>
               ),
-              Social: <SocialCell r={r} />,
+              // Mirrors the CSV template's linkedin_url column. Renders as a
+              // clickable link when present and respects the locked-state mask.
+              linkedin_url: r.is_unlocked ? (
+                r.linkedin_url ? (
+                  <a
+                    href={r.linkedin_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block max-w-[220px] truncate text-emerald-300 hover:underline"
+                    title={r.linkedin_url}
+                  >
+                    {r.linkedin_url}
+                  </a>
+                ) : (
+                  "—"
+                )
+              ) : (
+                <span className="text-gray-400">••••••••••</span>
+              ),
               Actions: r.is_unlocked ? (
                 <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                   <div className="flex gap-2">

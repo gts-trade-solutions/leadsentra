@@ -25,6 +25,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
 
   const body = await req.json().catch(() => ({}));
+
+  // Direct column updates (proper SQL columns).
   const map: Record<string, string> = {
     contact_name: "contact_name",
     email: "email",
@@ -41,6 +43,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       sets.push(`${col} = ?`);
       vals.push(v === "" ? null : v);
     }
+  }
+
+  // Meta JSON updates — these five fields are stored inside the meta JSON
+  // column rather than as proper columns. Use JSON_SET to patch only the
+  // keys the caller sent, preserving any other keys already in meta.
+  // COALESCE(meta, JSON_OBJECT()) handles rows where meta is NULL.
+  const metaKeys = ["department", "location", "notes", "facebook_url", "instagram_url"] as const;
+  const metaPairs: string[] = [];
+  const metaVals: any[] = [];
+  for (const key of metaKeys) {
+    if (key in body) {
+      const v = typeof body[key] === "string" ? body[key].trim() : body[key];
+      metaPairs.push(`'$.${key}', ?`);
+      metaVals.push(v === "" ? null : v);
+    }
+  }
+  if (metaPairs.length) {
+    sets.push(`meta = JSON_SET(COALESCE(meta, JSON_OBJECT()), ${metaPairs.join(", ")})`);
+    vals.push(...metaVals);
   }
 
   if (!sets.length) {

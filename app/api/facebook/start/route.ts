@@ -16,9 +16,14 @@ const AUTHZ = `https://www.facebook.com/${FB_VERSION}/dialog/oauth`;
 // come from the use cases configured on the Meta dashboard, not this array.
 // Meta has renamed `instagram_content_publish` -> `instagram_business_content_publish`
 // in the new use-cases model.
+// Scopes used only when FACEBOOK_CONFIG_ID is NOT set (classic apps).
+// Apps using "Facebook Login for Business" pass config_id instead, and the
+// underlying permissions (including page-posting capability) come from the
+// configured use case — so we no longer need to list `pages_manage_posts`
+// here, which Meta removed from the directly-requestable permission set in
+// favor of bundling it inside the "Manage everything on your Page" use case.
 const SCOPES = [
   "pages_show_list",
-  "pages_manage_posts",
   "pages_read_engagement",
   "instagram_basic",
   "instagram_business_content_publish",
