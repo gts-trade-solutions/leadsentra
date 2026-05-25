@@ -22,17 +22,16 @@ export async function POST(req: Request) {
   }
 
   const id = randomUUID();
-  const meta = JSON.stringify({
-    department: body.department ?? null,
-    location: body.location ?? null,
-    notes: body.notes ?? null,
-    facebook_url: body.facebook_url ?? null,
-    instagram_url: body.instagram_url ?? null,
-  });
-
+  // department / location / facebook_url / instagram_url / notes live as
+  // proper SQL columns in production (added via the 2026-05-11 migration).
+  // We previously stuffed these into the meta JSON, which made bulk-import
+  // and single-add diverge — bulk wrote to columns, single wrote to JSON.
+  // Writing to direct columns keeps both flows consistent.
   await db.execute(
-    `INSERT INTO contacts (id, user_id, company_id, contact_name, email, title, phone, linkedin_url, meta)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON))`,
+    `INSERT INTO contacts
+       (id, user_id, company_id, contact_name, email, title, phone,
+        linkedin_url, facebook_url, instagram_url, department, location, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       session.id,
@@ -42,7 +41,11 @@ export async function POST(req: Request) {
       body.title || null,
       body.phone || null,
       body.linkedin_url || null,
-      meta,
+      body.facebook_url || null,
+      body.instagram_url || null,
+      body.department || null,
+      body.location || null,
+      body.notes || null,
     ]
   );
 
@@ -69,11 +72,11 @@ export async function GET(req: Request) {
     ? ""
     : "LEFT JOIN unlocked_contacts uc ON uc.contact_id = c.id AND uc.user_id = ?";
 
-  // location / department / notes / facebook_url / instagram_url live inside
-  // the `meta` JSON column (POST handler stuffs them there). Extract them
-  // here so the contacts page can display them as proper columns instead of
-  // dashes. JSON_UNQUOTE turns a JSON-null into a SQL NULL — exactly what
-  // the UI's optional fields expect.
+  // department / location / facebook_url / instagram_url / notes are direct
+  // columns (added via 2026-05-11 migration). COALESCE falls back to the
+  // meta JSON for any legacy rows that were written before the migration
+  // landed — or to rows written briefly today while POST was routing data
+  // through the JSON instead of columns.
   const sql = `SELECT
         c.id,
         c.contact_name AS name,
@@ -81,11 +84,11 @@ export async function GET(req: Request) {
         c.email,
         c.phone,
         c.linkedin_url,
-        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.location'))      AS location,
-        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.department'))    AS department,
-        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.notes'))         AS notes,
-        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.facebook_url'))  AS facebook_url,
-        JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.instagram_url')) AS instagram_url,
+        COALESCE(c.location,      JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.location')))      AS location,
+        COALESCE(c.department,    JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.department')))    AS department,
+        COALESCE(c.notes,         JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.notes')))         AS notes,
+        COALESCE(c.facebook_url,  JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.facebook_url')))  AS facebook_url,
+        COALESCE(c.instagram_url, JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.instagram_url'))) AS instagram_url,
         co.company_name AS company,
         co.country     AS country,
         co.segment     AS segment,

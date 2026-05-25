@@ -424,7 +424,13 @@ export default function ContactsPage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch("/api/contacts", { credentials: "same-origin" });
+      // cache: "no-store" — without this, the browser may serve a stale
+      // cached response after the user adds a contact, so the new row
+      // never appears in the table until a hard refresh.
+      const res = await fetch("/api/contacts", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Failed to load contacts");
       const data: any[] = Array.isArray(json?.data) ? json.data : [];
@@ -468,6 +474,23 @@ export default function ContactsPage() {
         if (row?.status) setVerStatus(row.status as any);
       } catch {}
     })();
+  }, []);
+
+  // Refresh the contacts list on tab return — fixes the "I added contacts
+  // in another tab and don't see them here" complaint. Same pattern as
+  // companies list and campaigns list.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        load();
+      }
+    }
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   // Auto-poll SES while the sender is pending — handles "user verified in
@@ -1143,6 +1166,108 @@ export default function ContactsPage() {
           }`}
         >
           {banner.msg}
+        </div>
+      )}
+
+      {/* Bulk-import result panel — renders the per-row errors returned by
+          /api/contacts/import so the operator can see which rows failed and
+          why (duplicate email, unknown company, column too long, etc.). The
+          panel was previously invisible: uploadResult was set on the import
+          response but never rendered, so the client saw a "1 added · 49
+          failed" toast with no explanation. */}
+      {uploadResult && (
+        <div className="rounded-lg border border-gray-700 bg-gray-900 p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-white">
+                CSV import result
+              </div>
+              <div className="text-xs text-gray-400 mt-0.5">
+                Parsed <span className="text-white">{uploadResult.parsed ?? "—"}</span>
+                {" · "}
+                Added <span className="text-emerald-300">{uploadResult.inserted ?? 0}</span>
+                {(uploadResult.skipped ?? 0) > 0 && (
+                  <>
+                    {" · "}
+                    Skipped <span className="text-amber-300">{uploadResult.skipped}</span>
+                    <span className="text-gray-500"> (duplicates)</span>
+                  </>
+                )}
+                {(uploadResult.failed ?? 0) > 0 && (
+                  <>
+                    {" · "}
+                    Failed <span className="text-rose-300">{uploadResult.failed}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setUploadResult(null)}
+              className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:border-gray-600"
+              aria-label="Dismiss import result"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {/* Top-level error (e.g. "Missing required column") */}
+          {uploadResult.error && (
+            <div className="text-sm text-rose-300 border border-rose-700/50 bg-rose-900/20 rounded p-2">
+              {uploadResult.error}
+              {Array.isArray(uploadResult.detail) && uploadResult.detail.length > 0 && (
+                <ul className="mt-1 list-disc list-inside text-xs text-rose-200/80">
+                  {uploadResult.detail.map((d: string, i: number) => (
+                    <li key={i}>{d}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {/* Per-row errors. CSV row numbers are 1-based, header is row 1,
+              so row 2 = first data row. */}
+          {Array.isArray(uploadResult.errors) && uploadResult.errors.length > 0 && (
+            <div className="overflow-x-auto rounded border border-gray-800">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-800/60 text-gray-300">
+                  <tr>
+                    <th className="text-left px-3 py-1.5 w-24">CSV row</th>
+                    <th className="text-left px-3 py-1.5">Error</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800">
+                  {uploadResult.errors.map(
+                    (e: { row: number; error: string }, i: number) => (
+                      <tr key={i} className="hover:bg-gray-800/40">
+                        <td className="px-3 py-1.5 font-mono text-gray-400">
+                          {e.row > 0 ? e.row : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-rose-200">{e.error}</td>
+                      </tr>
+                    ),
+                  )}
+                </tbody>
+              </table>
+              {uploadResult.errors.length >= 50 && (
+                <div className="px-3 py-1.5 text-xs text-amber-300 bg-amber-950/30">
+                  Showing the first 50 errors. There may be more — fix these and re-import to see the rest.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Helpful tips if any rows failed. Duplicate emails are now
+              skipped silently (no failed count), so the tip set focuses on
+              the errors the operator can actually act on. */}
+          {(uploadResult.failed ?? 0) > 0 && (
+            <div className="text-xs text-gray-400 leading-relaxed">
+              <strong className="text-gray-300">Common fixes:</strong>{" "}
+              "Invalid email format" — fix the typo or remove the email value.{" "}
+              "Company not found" — either create the company first, leave the column blank, or use the exact company name.{" "}
+              "Data too long" — shorten the value (most string columns are capped at 255 chars).
+            </div>
+          )}
         </div>
       )}
 

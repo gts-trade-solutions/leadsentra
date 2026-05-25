@@ -1,6 +1,8 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { getUser } from "@/lib/auth";
+import { isStaff } from "@/lib/admin";
 import { withTracking, htmlToText, unsubscribeUrl } from "@/lib/emailTracking";
 import { sendEmail } from "@/lib/emailProvider";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
@@ -34,6 +36,15 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { campaignId: string } }
 ) {
+  // Auth + ownership check. This route previously had NO auth guard, so
+  // any anonymous caller could POST /api/campaigns/<id>/send to trigger a
+  // send (and drain credits) on any user's campaign. Now we require a
+  // session and verify the caller either owns the campaign or is staff.
+  const session = await getUser();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const campaignId = params.campaignId;
   const baseUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (!baseUrl) {
@@ -51,6 +62,14 @@ export async function POST(
   if (!campaignRow) {
     return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   }
+
+  // IDOR guard — only the owning user or staff (admin/moderator) can send.
+  // Without this, an attacker with a valid session can drain another
+  // user's credits by guessing/enumerating campaign UUIDs.
+  if (campaignRow.user_id !== session.id && !isStaff(session.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const isAdminBypass = !!Number(campaignRow.admin_bypass);
 
   // Already finished — don't re-charge or re-send.

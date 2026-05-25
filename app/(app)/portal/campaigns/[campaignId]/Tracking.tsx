@@ -73,7 +73,10 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
       setRows(Array.isArray(recJson?.recipients) ? recJson.recipients : []);
 
       // Campaign summary (from the list endpoint)
-      const listRes = await fetch("/api/campaigns", { credentials: "same-origin" });
+      const listRes = await fetch("/api/campaigns", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       const listJson = await listRes.json().catch(() => ({}));
       const summary = (Array.isArray(listJson?.campaigns) ? listJson.campaigns : [])
         .find((c: CampaignSummary) => c.id === campaignId);

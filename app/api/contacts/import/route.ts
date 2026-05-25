@@ -33,7 +33,12 @@ function buildAliasLookup() {
   return lookup;
 }
 
-const REQUIRED_CANONICAL = ["email"];
+// Per business request: rows without an email address are allowed (the user
+// can fill it in later via the Edit modal). We previously required at least
+// the email column to be present; now a CSV with any subset of recognised
+// columns goes through — duplicates skip silently and missing emails are
+// stored as NULL.
+const REQUIRED_CANONICAL: string[] = [];
 
 export async function POST(req: Request) {
   const session = await getUser();
@@ -88,6 +93,7 @@ export async function POST(req: Request) {
 
   let inserted = 0;
   let failed = 0;
+  let skipped = 0; // duplicate-email rows we quietly drop
   const errors: RowError[] = [];
 
   // Build a one-shot lookup of every existing company so we can resolve a
@@ -128,17 +134,43 @@ export async function POST(req: Request) {
         row[canonical] = v || null;
       }
 
+      // Email is optional. Empty rows just get a NULL email; the user can
+      // fill it in later via the Edit modal. Only flag rows where the
+      // email is present but malformed (someone typed garbage in the
+      // column) — that's a real CSV typo worth surfacing.
       const email = row.email ? row.email.trim().toLowerCase() : null;
-      if (!email) {
-        failed++; errors.push({ row: i + 2, error: "Missing email" });
-        continue;
-      }
-      if (!isEmailShape(email)) {
-        failed++; errors.push({ row: i + 2, error: `Invalid email format: ${email}` });
+      if (email && !isEmailShape(email)) {
+        failed++;
+        errors.push({ row: i + 2, error: `Invalid email format: ${email}` });
         continue;
       }
 
       const resolvedCompanyId = resolveCompanyId(row.company_id ?? null);
+
+      // Duplicate-email rows skip silently — no error, not counted as
+      // failed. Per business request: the same email should only ever
+      // exist once in a user's contacts, and the operator doesn't want
+      // to see a wall of "duplicate" warnings. We only check when there
+      // IS an email (NULL email rows can repeat freely).
+      if (email) {
+        const [dupRows] = await conn.execute(
+          "SELECT id FROM contacts WHERE user_id = ? AND email = ? LIMIT 1",
+          [session.id, email]
+        );
+        if ((dupRows as any[]).length) {
+          skipped++;
+          continue;
+        }
+      }
+
+      // Resolved company_id check — if a company name was passed but not
+      // found, resolveCompanyId falls back to the raw value, which would
+      // hit a FK / orphan situation. We allow company_id to be NULL but
+      // warn if the user typed a name that doesn't match an existing
+      // company so they know the contact landed without a company link.
+      if (row.company_id && !resolvedCompanyId) {
+        errors.push({ row: i + 2, error: `Company "${row.company_id}" not found — saved without a company` });
+      }
 
       const id = randomUUID();
       try {
@@ -166,7 +198,10 @@ export async function POST(req: Request) {
         inserted++;
       } catch (e: any) {
         failed++;
-        errors.push({ row: i + 2, error: e?.message || "Insert failed" });
+        // Surface SQL detail so the operator knows which column / value
+        // tripped MySQL up (column size, FK, etc.).
+        const code = e?.code ? ` [${e.code}]` : "";
+        errors.push({ row: i + 2, error: `${e?.message || "Insert failed"}${code}` });
       }
     }
 
@@ -181,6 +216,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     inserted,
     failed,
+    skipped,
     errors: errors.slice(0, 50),
     parsed: parsed.data.length,
   });

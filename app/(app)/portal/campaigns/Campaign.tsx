@@ -41,7 +41,10 @@ export default function CampaignsPage() {
   async function loadCampaigns() {
     setLoading(true);
     try {
-      const res = await fetch("/api/campaigns", { credentials: "same-origin" });
+      const res = await fetch("/api/campaigns", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       const data = await res.json().catch(() => ({}));
       setCampaigns(Array.isArray(data?.campaigns) ? data.campaigns : []);
     } catch {
@@ -70,6 +73,24 @@ export default function CampaignsPage() {
 
   useEffect(() => {
     loadCampaigns();
+  }, []);
+
+  // Refresh the campaign list whenever the user returns to this tab/page.
+  // Catches the common flow: user creates a new campaign in another tab,
+  // comes back here, and expects to see it. Without this, the list shows
+  // a stale snapshot from when the component first mounted.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        loadCampaigns();
+      }
+    }
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   // Poll for fresh metrics every 5s while there are sending campaigns

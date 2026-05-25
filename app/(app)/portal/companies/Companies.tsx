@@ -477,6 +477,22 @@ export default function CompaniesPage() {
   useEffect(() => {
     load();
   }, []);
+
+  // Refresh on tab return — same pattern as the campaigns list, fixes the
+  // "I added something in another tab and don't see it here" case.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        load();
+      }
+    }
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 250);
     return () => clearTimeout(t);
