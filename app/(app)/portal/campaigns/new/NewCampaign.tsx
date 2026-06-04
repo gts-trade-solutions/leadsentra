@@ -616,6 +616,39 @@ export default function NewCampaign() {
     }
   }
 
+  // Template recall: when the user finishes typing a campaign name, look up the
+  // most recent campaign they saved/sent under that exact name and offer to
+  // reuse its subject + content.  If the subject/content fields are still empty
+  // we fill them silently; if they already typed something we ask first so we
+  // never clobber in-progress work.
+  const lastTemplateLookup = useRef<string>("");
+  async function loadTemplateForName() {
+    const name = campaignName.trim();
+    if (!name || name === lastTemplateLookup.current) return;
+    lastTemplateLookup.current = name;
+    try {
+      const res = await fetch(
+        `/api/campaigns/template?name=${encodeURIComponent(name)}`,
+        { credentials: "same-origin", cache: "no-store" }
+      );
+      if (!res.ok) return;
+      const { template } = await res.json().catch(() => ({ template: null }));
+      if (!template) return;
+
+      const hasWork = subject.trim() || content.trim();
+      if (hasWork) {
+        if (!confirm(`A saved template named "${name}" was found. Load its subject and content? This replaces what you've typed.`)) {
+          return;
+        }
+      }
+      setSubject(template.subject || "");
+      setContent(template.html || "");
+      toast({ title: "Template loaded", description: `Reused your saved "${name}" content.` });
+    } catch {
+      /* lookup is best-effort — ignore network errors */
+    }
+  }
+
   function saveDraft() {
     if (!campaignName.trim()) {
       toast({ variant: "destructive", title: "Name is required", description: "Give your campaign a name." });
@@ -944,8 +977,12 @@ export default function NewCampaign() {
                 placeholder="e.g. Q1 product launch"
                 value={campaignName}
                 onChange={(e) => setCampaignName(e.target.value)}
+                onBlur={loadTemplateForName}
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200"
               />
+              <p className="mt-1 text-xs text-gray-500">
+                Reuse a name you&apos;ve sent before and its subject + content load automatically.
+              </p>
             </div>
             <div>
               <label htmlFor="camp-subject" className="block text-sm font-medium text-gray-300 mb-1">

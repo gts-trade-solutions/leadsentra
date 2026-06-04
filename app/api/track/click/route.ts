@@ -14,7 +14,7 @@ export async function GET(req: Request) {
     process.env.APP_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
     "https://example.com";
-  const target = safeTarget(u) ?? fallback;
+  const target = safeTarget(u, fallback) ?? fallback;
 
   if (c && t) {
     try {
@@ -46,12 +46,48 @@ export async function GET(req: Request) {
   return NextResponse.redirect(target, { status: 302 });
 }
 
-function safeTarget(u: string | null) {
+/**
+ * Resolve the click-through target.
+ *
+ * `u` arrives already percent-decoded (URLSearchParams.get decodes once), so we
+ * must NOT decode it again — a second decodeURIComponent corrupts links whose
+ * path/query legitimately contains %xx sequences (e.g. encoded spaces).
+ *
+ * We also accept links that aren't fully-qualified http(s) URLs instead of
+ * throwing the recipient back to the home page:
+ *   - "//host/path"          protocol-relative  -> https://host/path
+ *   - "/reporting/india-ev"  app-relative path  -> resolved against `base`
+ *   - "www.example.com/x"    scheme-less domain -> https://www.example.com/x
+ * Anything we still can't make sense of returns null so the caller falls back.
+ */
+function safeTarget(u: string | null, base: string): string | null {
   if (!u) return null;
+  const s = u.trim();
+  if (!s) return null;
+
+  // Already absolute http(s) — use as-is.
+  if (/^https?:\/\//i.test(s)) return s;
+
+  // Protocol-relative URL.
+  if (s.startsWith("//")) return `https:${s}`;
+
+  // App-relative path ("/reporting/...") — resolve against the app base URL.
+  if (s.startsWith("/")) {
+    try {
+      return new URL(s, base).toString();
+    } catch {
+      return null;
+    }
+  }
+
+  // Scheme-less bare domain like "www.example.com/report" or "example.com".
+  // Heuristic: starts with a hostname-looking token containing a dot, followed
+  // by end / slash / query / fragment.  Assume https.
+  if (/^[\w-]+(\.[\w-]+)+([/?#]|$)/.test(s)) return `https://${s}`;
+
+  // Last resort: treat as relative to the app base.
   try {
-    const decoded = decodeURIComponent(u);
-    if (!/^https?:\/\//i.test(decoded)) return null;
-    return decoded;
+    return new URL(s, base).toString();
   } catch {
     return null;
   }

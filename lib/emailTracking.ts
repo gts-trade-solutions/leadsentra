@@ -17,11 +17,21 @@ export function withTracking(html: string, campaignId: string, trackingToken: st
     .replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, unsubUrl)
     .replace(/\{\{\s*unsubscribe_link\s*\}\}/gi, unsubUrl);
 
-  // Rewrite ALL href links through our click-tracker, EXCEPT the unsubscribe
-  // URL itself (we never want to rewrite that — would break Gmail one-click).
-  body = body.replace(/href="([^"]+)"/g, (_m, url) => {
-    if (url === unsubUrl) return `href="${url}"`;
-    return `href="${baseUrl}/api/track/click?c=${campaignId}&t=${trackingToken}&u=${encodeURIComponent(url)}"`;
+  // Rewrite href links through our click-tracker, but ONLY real http(s)
+  // navigations.  Anything else must be left untouched:
+  //   - the unsubscribe URL (rewriting it breaks Gmail one-click)
+  //   - mailto: / tel: / sms: links (the footer contact email + phone) — these
+  //     aren't web pages, so routing them through /api/track/click lands the
+  //     recipient on the app home page instead of opening their mail/dialer
+  //   - in-page anchors (#...) and unresolved {{template}} placeholders
+  // Handles both double- and single-quoted href attributes.
+  body = body.replace(/href=(["'])(.*?)\1/g, (whole, quote, url) => {
+    if (url === unsubUrl) return whole;
+    // Only http:// and https:// links are click-tracked; everything else
+    // (mailto:, tel:, sms:, #anchor, {{placeholder}}, relative paths) passes
+    // through verbatim so it behaves exactly as the author intended.
+    if (!/^https?:\/\//i.test(url)) return whole;
+    return `href=${quote}${baseUrl}/api/track/click?c=${campaignId}&t=${trackingToken}&u=${encodeURIComponent(url)}${quote}`;
   });
 
   // If the message didn't include an unsubscribe link of its own, append a

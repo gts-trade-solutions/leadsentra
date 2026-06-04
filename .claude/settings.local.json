@@ -7,7 +7,16 @@
       "Bash(cd /d/leadiq-master && find . -type f -name \"*.tsx\" -o -name \"*.jsx\" | grep -E \"\\(campaign|audience\\)\" | head -20)",
       "Read(//d/leadiq-master/**)",
       "PowerShell(Get-ChildItem \"d:\\\\leadiq-master\\\\leadiq-master\\\\app\\\\auth\\\\\" -Recurse | Where-Object {$_.Name -match \"verify|signup\"})",
-      "Bash(grep -l \"ADD COLUMN segment\\\\|segment.*VARCHAR\\\\|companies.*segment\" \"d:\\\\\\\\leadiq-master\\\\\\\\leadiq-master\\\\\\\\migrations\"/*.sql)"
+      "Bash(grep -l \"ADD COLUMN segment\\\\|segment.*VARCHAR\\\\|companies.*segment\" \"d:\\\\\\\\leadiq-master\\\\\\\\leadiq-master\\\\\\\\migrations\"/*.sql)",
+      "Bash(grep -rn \"DEFAULT_FROM_NAME\\\\|DEFAULT_FROM_EMAIL\\\\|EMAIL_REPLY_TO\" .env*)",
+      "Bash(ls -la .env*)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} -> Location: %{redirect_url}\\\\n\" -I \"https://leadsentra.com/api/track/click?c=test&t=test&u=https%3A%2F%2Fraceinnovations.in%2Fmarket-report\" --max-time 20)",
+      "Bash(curl -s -o /dev/null -w \"home: HTTP %{http_code}\\\\n\" -I \"https://leadsentra.com/\" --max-time 20)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} -> Location: %{redirect_url}\\\\n\" -I \"https://leadsentra.com/api/track/click?c=test&t=test&u=mailto%3Aprojecthead%40raceinnovations.in\" --max-time 20)",
+      "Bash(rm -f /tmp/qptest.js /tmp/qptest2.js /tmp/wttest.js)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }
