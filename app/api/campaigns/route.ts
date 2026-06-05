@@ -49,6 +49,9 @@ export async function POST(req: Request) {
   const subject = body.subject ? String(body.subject).trim() : null;
   const html = body.html ? String(body.html) : null;
   const from_email = body.from_email ? String(body.from_email).trim() : null;
+  // Friendly From name chosen from the "Send from" picker.  Recorded on the
+  // campaign so the send route can build a "Name" <email> From header.
+  const from_name = body.from_name ? String(body.from_name).trim().slice(0, 255) : null;
   const status = String(body.status || "draft");
 
   // Audience resolution.  Admin-bypass mode `admin_all` is only honored for
@@ -249,11 +252,11 @@ export async function POST(req: Request) {
 
     await conn.execute(
       `INSERT INTO campaigns
-         (id, user_id, name, subject, html, from_email, status, recipients_count, credits_charged, admin_bypass)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+         (id, user_id, name, subject, html, from_email, from_name, status, recipients_count, credits_charged, admin_bypass)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       // recipients_count is the SENDABLE count, not the suppressed total —
       // that's what the campaign metrics + credit-cost calculations should see.
-      [id, session.id, name, subject, html, from_email, status, sendableCount, skipCreditCharge ? 1 : 0]
+      [id, session.id, name, subject, html, from_email, from_name, status, sendableCount, skipCreditCharge ? 1 : 0]
     );
 
     if (partitioned.length) {

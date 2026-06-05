@@ -55,7 +55,7 @@ export async function POST(
   const limit = Math.min(Math.max(body.limit ?? 200, 1), 1000);
 
   const [campRows] = await db.execute(
-    "SELECT id, user_id, subject, html, from_email, status, admin_bypass FROM campaigns WHERE id = ? LIMIT 1",
+    "SELECT id, user_id, subject, html, from_email, from_name, status, admin_bypass FROM campaigns WHERE id = ? LIMIT 1",
     [campaignId]
   );
   const campaignRow = (campRows as any[])[0];
@@ -81,7 +81,10 @@ export async function POST(
   const baseHtml = body.html ?? campaignRow.html;
   const fromEmail =
     body.fromEmail ?? campaignRow.from_email ?? process.env.DEFAULT_FROM_EMAIL;
-  const fromName = body.fromName ?? process.env.DEFAULT_FROM_NAME;
+  // Prefer the name saved on the campaign (chosen in the "Send from" picker),
+  // then any explicit override, then the env default.
+  const fromName =
+    body.fromName ?? campaignRow.from_name ?? process.env.DEFAULT_FROM_NAME;
 
   if (!subject || !baseHtml || !fromEmail) {
     return NextResponse.json(

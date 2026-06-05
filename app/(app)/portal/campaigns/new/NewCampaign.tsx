@@ -17,7 +17,10 @@ import {
   AlertTriangle,
   Eye,
   Shield,
+  ChevronDown,
+  Settings2,
 } from "lucide-react";
+import SenderManageDrawer from "@/components/SenderVerifyDrawer";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import WalletBadge from "@/components/WalletBadge";
@@ -25,18 +28,14 @@ import Instructions from "@/components/Instructions";
 import { useOptionalAuth } from "@/components/AuthProvider";
 import { useJobs } from "@/components/JobsProvider";
 import {
-  getMySender,
-  startEmailVerify,
   checkEmailStatus,
-  changesLeft,
+  listIdentities,
   type EmailIdentityRow,
 } from "@/lib/sender";
 import { toast } from "@/hooks/use-toast";
 
 type RecipientRecord = { contact_id: string; contact_name: string | null; email: string };
 type SelectionMode = "all" | "filtered" | "selected";
-
-const CHANGE_LIMIT = 2;
 
 export default function NewCampaign() {
   const router = useRouter();
@@ -48,18 +47,61 @@ export default function NewCampaign() {
   // contact with an email (ignores unlocks) and skips credit charging.
   const adminMode = isStaff && searchParams?.get("admin") === "1";
 
-  // Sender state
+  // Sender state — multi-identity "Send from" picker.
   const [mySender, setMySender] = useState<EmailIdentityRow | null>(null);
+  const [identities, setIdentities] = useState<EmailIdentityRow[]>([]);
+  const [selectedSenderId, setSelectedSenderId] = useState<string | null>(null);
   const [fromEmail, setFromEmail] = useState("");
-  const [identityId, setIdentityId] = useState<string | null>(null);
+  const [fromName, setFromName] = useState("");
+  const [manageOpen, setManageOpen] = useState(false);
   const [verStatus, setVerStatus] = useState<
     "idle" | "pending" | "verified" | "failed" | "error"
   >("idle");
-  const latestStatus =
-    verStatus !== "idle" ? verStatus : ((mySender?.status as any) ?? "idle");
-  const isVerified = latestStatus === "verified";
-  const left = changesLeft(mySender, CHANGE_LIMIT);
-  const [editingSender, setEditingSender] = useState(false);
+  const selectedIdentity =
+    identities.find((i) => i.id === selectedSenderId) ?? null;
+  // The selected sender is what actually sends, so verification is judged off
+  // it.  Falls back to the legacy single-sender status while identities load.
+  const isVerified = selectedIdentity
+    ? selectedIdentity.status === "verified"
+    : (verStatus !== "idle" ? verStatus : (mySender?.status as any)) === "verified";
+  // Mirrors selectedSenderId so loadIdentities can read the current selection
+  // without re-creating the callback on every selection change.
+  const selectedSenderIdRef = useRef<string | null>(null);
+
+  // Apply a chosen identity to the active From email + name (drives the send,
+  // the diagnostics panel, and the free-provider spam warning).
+  const selectSender = useCallback((row: EmailIdentityRow | null) => {
+    selectedSenderIdRef.current = row?.id ?? null;
+    setSelectedSenderId(row?.id ?? null);
+    setFromEmail(row?.email ?? "");
+    setFromName((row?.display_name ?? "") || "");
+    if (row?.status) setVerStatus(row.status as any);
+  }, []);
+
+  // Load every sender identity and auto-select the default (or first verified),
+  // preserving the current/preferred selection when it still exists.
+  const loadIdentities = useCallback(
+    async (preferId?: string) => {
+      try {
+        const rows = await listIdentities();
+        setIdentities(rows);
+        setMySender(rows[0] ?? null);
+        const prev = selectedSenderIdRef.current;
+        const wanted =
+          (preferId && rows.find((r) => r.id === preferId)) ||
+          (prev && rows.find((r) => r.id === prev)) ||
+          rows.find((r) => Number(r.is_default) === 1 && r.status === "verified") ||
+          rows.find((r) => r.status === "verified") ||
+          rows[0] ||
+          null;
+        selectSender(wanted);
+        return rows;
+      } catch {
+        return [] as EmailIdentityRow[];
+      }
+    },
+    [selectSender]
+  );
 
   // Campaign content
   const [campaignName, setCampaignName] = useState("");
@@ -217,28 +259,20 @@ export default function NewCampaign() {
   // ---- lifecycle ----
   useEffect(() => {
     (async () => {
-      try {
-        const row = await getMySender();
-        setMySender(row);
-        if (row?.email) setFromEmail(row.email);
-        if (row?.status) setVerStatus(row.status as any);
-      } catch { /* ignore */ }
+      await loadIdentities();
       await refreshCredits();
       await loadCount();
       if (adminMode) await loadAllContactsCount();
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminMode]);
-
-  useEffect(() => {
-    setEditingSender(!isVerified);
-  }, [isVerified]);
 
   // Auto-poll SES while the sender is pending — covers the case where the user
   // clicks the AWS verification link in another tab and returns to this page.
   // Silent: no toasts, no busy flag.  Stops as soon as we observe `verified`.
   useEffect(() => {
     if (isVerified) return;
-    if (!fromEmail && !identityId) return;
+    if (!selectedSenderId && !fromEmail) return;
 
     let cancelled = false;
 
@@ -246,15 +280,13 @@ export default function NewCampaign() {
       if (cancelled) return;
       if (document.visibilityState !== "visible") return;
       try {
-        const args = identityId ? { identityId } : { email: fromEmail };
+        const args = selectedSenderId ? { identityId: selectedSenderId } : { email: fromEmail };
         const resp = await checkEmailStatus(args);
         if (cancelled) return;
         setVerStatus(resp.status);
         if (resp.status === "verified") {
-          const fresh = await getMySender();
-          if (!cancelled && fresh) setMySender(fresh);
           if (!cancelled) {
-            setEditingSender(false);
+            await loadIdentities(selectedSenderId ?? undefined);
             toast({ title: "Sender verified" });
           }
         }
@@ -272,7 +304,8 @@ export default function NewCampaign() {
       clearInterval(id);
       window.removeEventListener("focus", onFocus);
     };
-  }, [isVerified, fromEmail, identityId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVerified, fromEmail, selectedSenderId]);
 
   async function refreshCredits() {
     try {
@@ -477,71 +510,6 @@ export default function NewCampaign() {
     loadPage(next, recSearch.trim().toLowerCase(), false);
   }
 
-  async function handleStartVerify() {
-    if (!fromEmail) return;
-    const current = mySender?.email?.trim().toLowerCase();
-    const target = fromEmail.trim().toLowerCase();
-    const isNew = !current || current !== target;
-
-    if (isNew && left === 0) {
-      toast({
-        variant: "destructive",
-        title: "Change limit reached",
-        description: `You can change your sender only ${CHANGE_LIMIT} times. Contact support to reset.`,
-      });
-      return;
-    }
-    if (mySender && isNew) {
-      const ok = confirm(`Replace your current sender:\n${mySender.email}\n→ ${fromEmail}?`);
-      if (!ok) return;
-    }
-    setBusy(true);
-    try {
-      const resp = await startEmailVerify(fromEmail);
-      setIdentityId(resp?.id ?? null);
-      setVerStatus("pending");
-      const fresh = await getMySender();
-      if (fresh) setMySender(fresh);
-      toast({
-        title: "Verification email sent",
-        description: "Check your inbox to confirm.",
-      });
-    } catch (e: any) {
-      setVerStatus("error");
-      toast({
-        variant: "destructive",
-        title: "Verification failed",
-        description: e?.message || "Try again later.",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function pollVerification() {
-    if (!fromEmail && !identityId) return;
-    setBusy(true);
-    try {
-      const args = identityId ? { identityId } : { email: fromEmail };
-      const resp = await checkEmailStatus(args);
-      setVerStatus(resp.status);
-      if (resp.status === "verified") {
-        const fresh = await getMySender();
-        if (fresh) setMySender(fresh);
-        setEditingSender(false);
-        toast({ title: "Sender verified" });
-      } else if (resp.status === "pending") {
-        toast({ title: "Still pending", description: "Complete verification from your inbox." });
-      } else if (resp.status === "failed") {
-        toast({ variant: "destructive", title: "Verification failed" });
-      }
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Could not fetch status", description: e?.message || "" });
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function submitCampaign(
     status: "draft" | "sending" | "scheduled",
     scheduledAtIso?: string
@@ -553,6 +521,7 @@ export default function NewCampaign() {
         subject,
         html: content,
         from_email: fromEmail,
+        from_name: fromName || null,
         status,
         audience: buildAudience(),
       };
@@ -846,121 +815,86 @@ export default function NewCampaign() {
           </ul>
         </Instructions>
 
-        {/* Sender card */}
+        {/* Sender card — "Send from" picker over the user's verified identities */}
         <Card id="sender" title="Sender" icon={<Mail className="w-5 h-5 text-emerald-400" />}>
-          {mySender && (
-            <div className="mb-3 p-3 border border-gray-700 rounded-lg bg-gray-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
-                <div className="text-xs text-gray-400 mb-1">Your sender</div>
-                <div className="text-sm text-white break-all">{mySender.email}</div>
-                {mySender.status !== "verified" && (
-                  <div className="text-xs text-amber-300 mt-0.5">{mySender.status}</div>
-                )}
+          {identities.length === 0 ? (
+            // No senders yet — prompt to add the first one via Manage.
+            <div className="p-4 border border-gray-700 rounded-lg bg-gray-900/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="text-sm text-gray-300">
+                You haven't added a sender yet. Add and verify an email address to send from.
               </div>
-              <div className="flex items-center gap-2">
-                {/* Verified status badge — green when SES confirms the
-                    identity is ready to send from, red otherwise. The
-                    previous render hid the badge entirely until verified,
-                    so users assumed "no badge = OK" and tried to send. */}
+              <button
+                type="button"
+                onClick={() => setManageOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium whitespace-nowrap"
+              >
+                <Mail className="w-4 h-4" />
+                Add sender
+              </button>
+            </div>
+          ) : (
+            <>
+              <label htmlFor="send-from" className="block text-sm text-gray-300 mb-1">
+                Send from
+              </label>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="relative flex-1 min-w-0">
+                  <select
+                    id="send-from"
+                    value={selectedSenderId ?? ""}
+                    onChange={(e) => {
+                      const row = identities.find((i) => i.id === e.target.value) ?? null;
+                      selectSender(row);
+                    }}
+                    className="w-full appearance-none px-3 py-2 pr-9 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 text-sm"
+                  >
+                    {identities.map((i) => {
+                      const name = (i.display_name ?? "").trim();
+                      const label =
+                        (name ? `"${name}" <${i.email}>` : i.email) +
+                        (Number(i.is_default) === 1 ? " (default)" : "") +
+                        (i.status === "verified" ? " ✓ verified" : ` — ${i.status}`);
+                      return (
+                        <option key={i.id} value={i.id} disabled={i.status !== "verified"}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+
                 {isVerified ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-emerald-900/30 text-emerald-200 border border-emerald-700">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-emerald-900/30 text-emerald-200 border border-emerald-700 whitespace-nowrap">
                     <ShieldCheck className="w-3.5 h-3.5" />
                     Verified
                   </span>
                 ) : (
                   <span
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-rose-900/30 text-rose-200 border border-rose-700"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-rose-900/30 text-rose-200 border border-rose-700 whitespace-nowrap"
                     title="This sender hasn't completed SES verification yet — campaigns won't send until it does."
                   >
                     <ShieldAlert className="w-3.5 h-3.5" />
                     Not verified
                   </span>
                 )}
-                {/* Change-sender toggle — visible whether verified or not so the
-                    user can swap to a domain sender (e.g. marketing@raceautoindia.com)
-                    even after they've previously verified a gmail address. */}
-                {!editingSender && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingSender(true);
-                      // Pre-clear so they see an empty box rather than the
-                      // existing address (they're about to type a different one).
-                      setFromEmail("");
-                    }}
-                    disabled={left === 0}
-                    className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 disabled:opacity-50"
-                    title={
-                      left === 0
-                        ? `Sender change limit reached (${CHANGE_LIMIT}/${CHANGE_LIMIT}). Contact support to reset.`
-                        : `Change your sender (${left} change${left === 1 ? "" : "s"} left)`
-                    }
-                  >
-                    <RefreshCcw className="w-3 h-3" />
-                    Change
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
 
-          {editingSender && (
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 items-end">
-              <div>
-                <label htmlFor="from-email" className="block text-sm text-gray-300 mb-1">
-                  {isVerified ? "New sender email" : "From (sender email)"}
-                </label>
-                <input
-                  id="from-email"
-                  type="email"
-                  placeholder="you@company.com"
-                  value={fromEmail}
-                  onChange={(e) => setFromEmail(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200"
-                />
-                {mySender && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    You can change your sender <b>{left}</b> more {left === 1 ? "time" : "times"}
-                    {" "}(max {CHANGE_LIMIT}).
-                  </p>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setManageOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 whitespace-nowrap"
+                >
+                  <Settings2 className="w-4 h-4" />
+                  Manage
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleStartVerify}
-                disabled={!fromEmail || busy}
-                className="h-[42px] px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium"
-              >
-                {busy ? "Working…" : isVerified ? "Send to new email" : "Verify"}
-              </button>
-              <button
-                type="button"
-                onClick={pollVerification}
-                disabled={busy || latestStatus === "idle"}
-                className="h-[42px] px-4 rounded-lg border border-gray-700 bg-gray-900 hover:bg-gray-800 text-gray-200 text-sm flex items-center gap-1"
-              >
-                <RefreshCcw className="w-4 h-4" />
-                Check status
-              </button>
-            </div>
-          )}
 
-          {/* Cancel button to back out of edit mode without changing anything,
-              only shown when the user explicitly clicked Change on a verified
-              sender (and we have something to revert to). */}
-          {editingSender && isVerified && mySender?.email && (
-            <div className="mt-2 text-right">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingSender(false);
-                  setFromEmail(mySender.email);
-                }}
-                className="text-xs text-gray-400 hover:text-gray-200 underline"
-              >
-                Cancel — keep {mySender.email}
-              </button>
-            </div>
+              <p className="text-xs text-emerald-300/90 mt-2">
+                {isVerified
+                  ? "SES-verified identity. Recipient sees the From name and address above."
+                  : "This sender isn't verified yet — pick a verified one or verify it under Manage."}
+              </p>
+            </>
           )}
         </Card>
 
@@ -1645,6 +1579,15 @@ export default function NewCampaign() {
             </div>
           </div>
         )}
+
+        {/* Manage senders drawer — add / verify / set-default / delete.
+            Reloads the picker (keeping any newly-touched sender selected)
+            whenever it changes something. */}
+        <SenderManageDrawer
+          open={manageOpen}
+          onClose={() => setManageOpen(false)}
+          onChanged={(preferId?: string) => loadIdentities(preferId)}
+        />
       </div>
     </AuthGuard>
   );

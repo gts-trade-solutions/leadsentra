@@ -306,6 +306,7 @@ CREATE TABLE campaigns (
   subject           VARCHAR(255) NULL,
   html              MEDIUMTEXT   NULL,
   from_email        VARCHAR(255) NULL,
+  from_name         VARCHAR(255) NULL,
   price_per_email   DECIMAL(10,4) NOT NULL DEFAULT 0,
   recipients_count  INT          NOT NULL DEFAULT 0,
   credits_charged   INT          NOT NULL DEFAULT 0,
@@ -376,7 +377,9 @@ CREATE TABLE email_identities (
   id             CHAR(36)     NOT NULL,
   user_id        CHAR(36)     NOT NULL,
   email          VARCHAR(255) NOT NULL,
+  display_name   VARCHAR(255) NULL,                        -- friendly From name, e.g. "Race Auto India"
   status         VARCHAR(32)  NOT NULL DEFAULT 'pending',  -- pending / verified / failed
+  is_default     TINYINT(1)   NOT NULL DEFAULT 0,          -- one default sender per user
   verified_at    DATETIME     NULL,
   changes_used   INT          NOT NULL DEFAULT 0,
   changes_limit  INT          NOT NULL DEFAULT 3,

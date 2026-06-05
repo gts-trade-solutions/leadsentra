@@ -5,16 +5,14 @@ import { getUser } from "@/lib/auth";
 import {
   isSesConfigured,
   createEmailIdentity,
-  deleteEmailIdentity,
 } from "@/lib/ses";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Total sender-email changes allowed per account.  Hard server-side cap —
-// the client also enforces this for UX, but the server is the source of truth.
-// After this many changes, the user must contact support to reset.
-const CHANGE_LIMIT = 2;
+// Maximum sender identities a single account may verify.  The "Send from"
+// dropdown lists these; this caps how many a user can accumulate.
+const MAX_IDENTITIES = 10;
 
 function isEmail(s: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -26,108 +24,72 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
   const email = String(body?.email || "").trim().toLowerCase();
+  // Optional friendly From name (e.g. "Race Auto India").  Trimmed + capped to
+  // the column width; blank means the recipient just sees the address.
+  const displayName = String(body?.name || "").trim().slice(0, 255) || null;
 
   if (!email || !isEmail(email)) {
     return NextResponse.json({ error: "Invalid email address" }, { status: 400 });
   }
 
-  // Find any existing identity for this user (one active row per user).
-  const [rows] = await db.execute(
-    `SELECT id, email, status, verified_at, changes_used, changes_limit
-       FROM email_identities
-      WHERE user_id = ?
-      ORDER BY updated_at DESC
-      LIMIT 1`,
+  // Re-verifying an email this user already added?  Refresh the SES identity,
+  // bump it back to pending, and update the display name if one was provided.
+  const [existingRows] = await db.execute(
+    `SELECT id, status FROM email_identities
+      WHERE user_id = ? AND LOWER(email) = ? LIMIT 1`,
+    [session.id, email]
+  );
+  const existing = (existingRows as any[])[0] || null;
+
+  if (existing) {
+    try {
+      if (isSesConfigured()) await createEmailIdentity(email);
+    } catch (e: any) {
+      return NextResponse.json(
+        { error: e?.message || "SES error", code: "ses_error" },
+        { status: 502 }
+      );
+    }
+
+    const newStatus = isSesConfigured() ? "pending" : "verified";
+    await db.execute(
+      `UPDATE email_identities
+          SET status = ?,
+              verified_at = ?,
+              display_name = COALESCE(?, display_name),
+              updated_at = NOW()
+        WHERE id = ?`,
+      [newStatus, newStatus === "verified" ? new Date() : null, displayName, existing.id]
+    );
+
+    return NextResponse.json({
+      mode: "auth",
+      id: existing.id,
+      email,
+      display_name: displayName,
+      status: newStatus,
+      dev: !isSesConfigured(),
+    });
+  }
+
+  // New identity — enforce the per-account cap.
+  const [countRows] = await db.execute(
+    "SELECT COUNT(*) AS n FROM email_identities WHERE user_id = ?",
     [session.id]
   );
-  const existing = (rows as any[])[0] || null;
-
-  // Re-verifying the same email? Just refresh the SES identity and bump status to pending.
-  if (existing && String(existing.email).toLowerCase() === email) {
-    try {
-      if (isSesConfigured()) {
-        await createEmailIdentity(email);
-      }
-    } catch (e: any) {
-      return NextResponse.json(
-        { error: e?.message || "SES error", code: "ses_error" },
-        { status: 502 }
-      );
-    }
-
-    const newStatus = isSesConfigured() ? "pending" : "verified";
-    await db.execute(
-      `UPDATE email_identities
-          SET status = ?, verified_at = ?, updated_at = NOW()
-        WHERE id = ?`,
-      [newStatus, newStatus === "verified" ? new Date() : null, existing.id]
+  const total = Number((countRows as any[])[0]?.n || 0);
+  if (total >= MAX_IDENTITIES) {
+    return NextResponse.json(
+      {
+        error: `You can verify at most ${MAX_IDENTITIES} senders. Remove one from Manage to add another.`,
+        code: "identity_limit_reached",
+      },
+      { status: 403 }
     );
-
-    return NextResponse.json({
-      mode: "auth",
-      id: existing.id,
-      email,
-      status: newStatus,
-      changes_used: Number(existing.changes_used || 0),
-      changes_limit: CHANGE_LIMIT,
-      dev: !isSesConfigured(),
-    });
   }
 
-  // Changing to a new sender — enforce the change limit
-  if (existing) {
-    const used = Number(existing.changes_used || 0);
-    if (used >= CHANGE_LIMIT) {
-      return NextResponse.json(
-        {
-          error: `Sender change limit reached (${CHANGE_LIMIT}/${CHANGE_LIMIT}). Contact support to reset.`,
-          code: "change_limit_reached",
-        },
-        { status: 403 }
-      );
-    }
-
-    // Best-effort: drop the old identity from SES so we don't leak it.
-    if (isSesConfigured()) {
-      try { await deleteEmailIdentity(existing.email); } catch { /* ignore */ }
-    }
-
-    try {
-      if (isSesConfigured()) {
-        await createEmailIdentity(email);
-      }
-    } catch (e: any) {
-      return NextResponse.json(
-        { error: e?.message || "SES error", code: "ses_error" },
-        { status: 502 }
-      );
-    }
-
-    const newStatus = isSesConfigured() ? "pending" : "verified";
-    await db.execute(
-      `UPDATE email_identities
-          SET email = ?, status = ?, verified_at = ?,
-              changes_used = changes_used + 1, updated_at = NOW()
-        WHERE id = ?`,
-      [email, newStatus, newStatus === "verified" ? new Date() : null, existing.id]
-    );
-
-    return NextResponse.json({
-      mode: "auth",
-      id: existing.id,
-      email,
-      status: newStatus,
-      changes_used: used + 1,
-      changes_limit: CHANGE_LIMIT,
-      dev: !isSesConfigured(),
-    });
-  }
-
-  // First-time identity for this user
   try {
-    if (isSesConfigured()) {
-      await createEmailIdentity(email);
-    }
+    if (isSesConfigured()) await createEmailIdentity(email);
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message || "SES error", code: "ses_error" },
@@ -137,17 +99,22 @@ export async function POST(req: Request) {
 
   const id = randomUUID();
   const newStatus = isSesConfigured() ? "pending" : "verified";
+  // First identity for this account becomes the default automatically.
+  const isDefault = total === 0 ? 1 : 0;
+
   await db.execute(
     `INSERT INTO email_identities
-       (id, user_id, email, status, verified_at, changes_used, changes_limit, provider)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+       (id, user_id, email, display_name, status, is_default, verified_at, changes_used, changes_limit, provider)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
     [
       id,
       session.id,
       email,
+      displayName,
       newStatus,
+      isDefault,
       newStatus === "verified" ? new Date() : null,
-      CHANGE_LIMIT,
+      MAX_IDENTITIES,
       isSesConfigured() ? "ses" : "dev",
     ]
   );
@@ -156,9 +123,9 @@ export async function POST(req: Request) {
     mode: "auth",
     id,
     email,
+    display_name: displayName,
     status: newStatus,
-    changes_used: 0,
-    changes_limit: CHANGE_LIMIT,
+    is_default: !!isDefault,
     dev: !isSesConfigured(),
   });
 }
