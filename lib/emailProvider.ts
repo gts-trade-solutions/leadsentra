@@ -237,14 +237,21 @@ function toQuotedPrintable(input: string): string {
   return out
     .split("\r\n")
     .map((line) => {
+      // Tokenize so a "=XX" escape is one indivisible unit.  RFC 2045 §6.7
+      // forbids a soft line break inside an encoded byte — if the wrap splits
+      // "=3D" into "=" + "3D", receiving mail clients render a literal "3D",
+      // which corrupts every "=" in a URL (e.g. a click-tracking link's query
+      // string) and breaks the link.
+      const tokens = line.match(/=[0-9A-Fa-f]{2}|[\s\S]/g) || [];
       const parts: string[] = [];
       let cur = "";
-      for (const ch of line) {
-        if (cur.length + ch.length > 75) {
+      for (const tok of tokens) {
+        // +1 leaves room for the trailing "=" soft-break marker (max 76/line).
+        if (cur.length + tok.length > 75) {
           parts.push(cur + "=");
           cur = "";
         }
-        cur += ch;
+        cur += tok;
       }
       parts.push(cur);
       return parts.join("\r\n");
