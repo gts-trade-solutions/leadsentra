@@ -27,6 +27,9 @@ type RecipientRow = {
   email: string;
   status: string;
   message_id: string | null;
+  error_reason: string | null;
+  bounced_at: string | null;
+  complaint_at: string | null;
   sent_at: string | null;
   opened_at: string | null;
   clicked_at: string | null;
@@ -45,7 +48,7 @@ type CampaignSummary = {
 
 type Filter =
   | "all" | "delivered" | "opened" | "clicked"
-  | "bounced" | "complained" | "not_opened" | "suppressed";
+  | "bounced" | "complained" | "not_opened" | "suppressed" | "failed";
 
 const PER_PAGE = 100;
 
@@ -100,7 +103,7 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
   const stats = useMemo(() => {
     let total = rows.length;
     let delivered = 0, bounced = 0, complained = 0, openedUnique = 0;
-    let opens = 0, clicks = 0, suppressed = 0, queued = 0, sent = 0;
+    let opens = 0, clicks = 0, suppressed = 0, queued = 0, sent = 0, failed = 0;
     for (const r of rows) {
       if (r.status === "delivered") delivered++;
       if (r.status === "bounced") bounced++;
@@ -108,11 +111,12 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
       if (r.status === "suppressed") suppressed++;
       if (r.status === "queued") queued++;
       if (r.status === "sent") sent++;
+      if (r.status === "failed") failed++;
       if (r.opened_at) openedUnique++;
       opens += r.opens_count || 0;
       clicks += r.clicks_count || 0;
     }
-    return { total, delivered, bounced, complained, openedUnique, opens, clicks, suppressed, queued, sent };
+    return { total, delivered, bounced, complained, openedUnique, opens, clicks, suppressed, queued, sent, failed };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -126,6 +130,7 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
         (filter === "bounced" && r.status === "bounced") ||
         (filter === "complained" && r.status === "complained") ||
         (filter === "suppressed" && r.status === "suppressed") ||
+        (filter === "failed" && r.status === "failed") ||
         (filter === "not_opened" && !r.opened_at && (r.status === "sent" || r.status === "delivered"));
       if (!m) return false;
       if (!q) return true;
@@ -197,6 +202,10 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
           <span><b className="text-gray-200">{stats.sent}</b> sent</span>
           <span><b className="text-gray-200">{stats.queued}</b> queued</span>
           <span>
+            <AlertTriangle className="w-3 h-3 inline -mt-0.5 mr-1 text-rose-300" />
+            <b className="text-rose-300">{stats.failed}</b> failed (not sent)
+          </span>
+          <span>
             <ShieldOff className="w-3 h-3 inline -mt-0.5 mr-1 text-orange-300" />
             <b className="text-orange-300">{stats.suppressed}</b> suppressed (skipped, no charge)
           </span>
@@ -214,6 +223,7 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
                 ["not_opened", "Not opened"],
                 ["bounced", "Bounced"],
                 ["complained", "Complained"],
+                ["failed", "Failed"],
                 ["suppressed", "Suppressed"],
               ] as [Filter, string][]
             ).map(([val, label]) => (
@@ -267,7 +277,18 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
                   <tr key={r.id} className="text-gray-200">
                     <td className="px-3 py-2 max-w-[220px] truncate">{r.contact_name || "—"}</td>
                     <td className="px-3 py-2 max-w-[260px] truncate text-gray-300">{r.email}</td>
-                    <td className="px-3 py-2"><RecipientStatus status={r.status} /></td>
+                    <td className="px-3 py-2">
+                      <RecipientStatus status={r.status} />
+                      {r.error_reason &&
+                        (r.status === "failed" || r.status === "bounced" || r.status === "complained") && (
+                          <div
+                            className="mt-1 max-w-[280px] text-xs text-rose-300/90 break-words"
+                            title={r.error_reason}
+                          >
+                            {r.error_reason}
+                          </div>
+                        )}
+                    </td>
                     <td className="px-3 py-2 text-gray-400">{fmtDate(r.sent_at)}</td>
                     <td className="px-3 py-2">
                       {r.opens_count > 0 ? (

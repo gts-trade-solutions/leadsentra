@@ -21,6 +21,7 @@ export async function GET(
 
   const [rows] = await db.execute(
     `SELECT cr.id, cr.campaign_id, cr.contact_id, cr.email, cr.status, cr.message_id,
+            cr.error_reason, cr.bounced_at, cr.complaint_at,
             cr.created_at AS sent_at, cr.opened_at, cr.clicked_at, cr.last_event_at,
             cr.opens_count, cr.clicks_count,
             c.contact_name

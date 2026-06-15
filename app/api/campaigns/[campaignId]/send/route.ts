@@ -279,6 +279,24 @@ export async function POST(
         "UPDATE campaign_recipients SET status='failed', error_reason=?, last_event_at = NOW() WHERE id = ?",
         [String(msg).slice(0, 500), r.id]
       );
+      // Add the address to the bounce/suppression list with the reason so it
+      // shows up alongside real bounces and is skipped in future campaigns.
+      // INSERT IGNORE: the unique (user_id, type, value) constraint dedupes
+      // repeats and never clobbers an existing (e.g. real-bounce) entry.
+      // NOTE: this suppresses on ANY send failure — including transient/config
+      // errors (sender-not-verified, throttling).  To re-enable such an
+      // address later, mark it "corrected" on the Suppressions page.
+      if (campaignRow.user_id && r.email) {
+        await db.execute(
+          `INSERT IGNORE INTO suppressions (user_id, type, value, reason, source)
+           VALUES (?, 'email', ?, ?, 'bounce')`,
+          [
+            campaignRow.user_id,
+            String(r.email).toLowerCase(),
+            `Send failed: ${String(msg).slice(0, 230)}`,
+          ]
+        ).catch(() => {});
+      }
     }
   }
 
