@@ -6,10 +6,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 export async function POST(req: NextRequest) {
   await requireUser();
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const body = await req.json();
   const { title = "", context = "", tone = "professional", length = 120 } = body || {};
   const sys = `You are a social media copywriter. Keep output around ${length} words in ${tone} tone.`;

@@ -12,10 +12,21 @@ export default function SignUpPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [companyId, setCompanyId] = useState('');
+  const [companies, setCompanies] = useState<{ company_id: string; name: string }[]>([]);
+  const [companyQuery, setCompanyQuery] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Load the company list for the "which company do you want to join" picker.
+  useEffect(() => {
+    fetch('/api/companies/public', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((d) => setCompanies(Array.isArray(d?.data) ? d.data : []))
+      .catch(() => setCompanies([]));
+  }, []);
 
   // If already signed in, bounce to next or /companies
   useEffect(() => {
@@ -52,6 +63,10 @@ export default function SignUpPage() {
       setErrorMsg(pwError);
       return;
     }
+    if (!companyId) {
+      setErrorMsg('Please choose the company you want to join.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -59,7 +74,7 @@ export default function SignUpPage() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, company_id: companyId || undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'Unable to sign up');
@@ -113,6 +128,42 @@ export default function SignUpPage() {
           </div>
 
           <div>
+            <label className="block text-sm text-gray-300 mb-1">
+              Company to join <span className="text-red-400">*</span>
+            </label>
+            {companies.length > 12 && (
+              <input
+                type="text"
+                value={companyQuery}
+                onChange={(e) => setCompanyQuery(e.target.value)}
+                placeholder="Search companies…"
+                className="w-full mb-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            )}
+            <select
+              required
+              value={companyId}
+              onChange={(e) => setCompanyId(e.target.value)}
+              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="" disabled>— Select your company —</option>
+              {companies
+                .filter((c) =>
+                  !companyQuery.trim() ? true : c.name.toLowerCase().includes(companyQuery.trim().toLowerCase())
+                )
+                .slice(0, 200)
+                .map((c) => (
+                  <option key={c.company_id} value={c.company_id}>
+                    {c.name}
+                  </option>
+                ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Your request to join is sent to an admin for approval. You'll get access once it's approved.
+            </p>
+          </div>
+
+          <div>
             <label className="block text-sm text-gray-300 mb-1">Password</label>
             <input
               type="password"
@@ -136,7 +187,7 @@ export default function SignUpPage() {
 
           <button
             type="submit"
-            disabled={loading || !pwValid || !email}
+            disabled={loading || !pwValid || !email || !companyId}
             className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors"
           >
             {loading ? 'Creating account…' : 'Create account'}

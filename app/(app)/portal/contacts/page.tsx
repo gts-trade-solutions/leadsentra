@@ -8,6 +8,8 @@ import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
 import SelectAllCheckbox from "@/components/SelectAllCheckbox";
+import { externalUrl } from "@/lib/url";
+import PhoneInput from "@/components/PhoneInput";
 
 import {
   getMySender,
@@ -23,6 +25,7 @@ import {
   Facebook,
   Instagram,
   Linkedin,
+  Globe,
   Search as SearchIcon,
   SortAsc,
   SortDesc,
@@ -187,7 +190,7 @@ export default function ContactsPage() {
     linkedin_url: "",
   });
   const [sortKey, setSortKey] = useState<
-    "name" | "title" | "company" | "location"
+    "name" | "title" | "company" | "country"
   >("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
@@ -311,10 +314,10 @@ export default function ContactsPage() {
     // Lazy-load the companies dropdown the first time the user edits a row.
     if (companies.length === 0) {
       try {
-        const res = await fetch("/api/companies?limit=5000", { credentials: "same-origin" });
+        const res = await fetch("/api/companies?limit=100000", { credentials: "same-origin" });
         const j = await res.json().catch(() => ({}));
         const list = Array.isArray(j?.data) ? j.data : [];
-        setCompanies(list.map((c: any) => ({ company_id: c.company_id, company_name: c.company_name })));
+        setCompanies(list.map((c: any) => ({ company_id: c.company_id, company_name: c.company_name || c.name || c.company_id })));
         // Best-effort: prefill the select with the row's current company by name
         const match = list.find((c: any) => c.company_name === r.company);
         if (match) setEditForm((f) => ({ ...f, company_id: match.company_id }));
@@ -1111,10 +1114,10 @@ export default function ContactsPage() {
             setShowAdd(true);
             (async () => {
               try {
-                const res = await fetch("/api/companies?limit=5000", { credentials: "same-origin" });
+                const res = await fetch("/api/companies?limit=100000", { credentials: "same-origin" });
                 const j = await res.json().catch(() => ({}));
                 const list = Array.isArray(j?.data) ? j.data : [];
-                setCompanies(list.map((r: any) => ({ company_id: r.company_id, company_name: r.company_name })));
+                setCompanies(list.map((r: any) => ({ company_id: r.company_id, company_name: r.company_name || r.name || r.company_id })));
               } catch {
                 setCompanies([]);
               }
@@ -1414,7 +1417,7 @@ export default function ContactsPage() {
                 <option value="name">Name</option>
                 <option value="title">Title</option>
                 <option value="company">Company</option>
-                <option value="location">Location</option>
+                <option value="country">Country</option>
               </select>
               <button
                 onClick={() =>
@@ -1473,10 +1476,10 @@ export default function ContactsPage() {
               setShowAdd(true);
               (async () => {
                 try {
-                  const res = await fetch("/api/companies?limit=5000", { credentials: "same-origin" });
+                  const res = await fetch("/api/companies?limit=100000", { credentials: "same-origin" });
                   const j = await res.json().catch(() => ({}));
                   const list = Array.isArray(j?.data) ? j.data : [];
-                  setCompanies(list.map((r: any) => ({ company_id: r.company_id, company_name: r.company_name })));
+                  setCompanies(list.map((r: any) => ({ company_id: r.company_id, company_name: r.company_name || r.name || r.company_id })));
                 } catch { setCompanies([]); }
               })();
             },
@@ -1527,19 +1530,37 @@ export default function ContactsPage() {
               // Mirrors the CSV template's linkedin_url column. Renders as a
               // clickable link when present and respects the locked-state mask.
               linkedin_url: r.is_unlocked ? (
-                r.linkedin_url ? (
-                  <a
-                    href={r.linkedin_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block max-w-[220px] truncate text-emerald-300 hover:underline"
-                    title={r.linkedin_url}
-                  >
-                    {r.linkedin_url}
-                  </a>
-                ) : (
-                  "—"
-                )
+                (() => {
+                  const li = externalUrl(r.linkedin_url);
+                  const web = externalUrl((r as any).website);
+                  if (!li && !web) return "—";
+                  return (
+                    <div className="flex flex-col gap-1 max-w-[220px]">
+                      {li && (
+                        <a
+                          href={li}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 truncate text-emerald-300 hover:underline"
+                          title={r.linkedin_url ?? undefined}
+                        >
+                          <Linkedin className="w-3.5 h-3.5 shrink-0" /> LinkedIn
+                        </a>
+                      )}
+                      {web && (
+                        <a
+                          href={web}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 truncate text-sky-300 hover:underline"
+                          title={(r as any).website}
+                        >
+                          <Globe className="w-3.5 h-3.5 shrink-0" /> Website
+                        </a>
+                      )}
+                    </div>
+                  );
+                })()
               ) : (
                 <span className="text-gray-400">••••••••••</span>
               ),
@@ -1971,7 +1992,7 @@ export default function ContactsPage() {
                               const created = j?.company;
                               if (!created?.company_id) throw new Error("No company id returned");
                               // Refresh companies list, then auto-select the new one.
-                              const listRes = await fetch("/api/companies?limit=5000", {
+                              const listRes = await fetch("/api/companies?limit=100000", {
                                 credentials: "same-origin",
                               });
                               const listJ = await listRes.json().catch(() => ({}));
@@ -2062,13 +2083,9 @@ export default function ContactsPage() {
                   <label className="text-xs text-gray-400 block mb-1">
                     Phone
                   </label>
-                  <input
+                  <PhoneInput
                     value={form.phone}
-                    onChange={(e) =>
-                      setForm({ ...form, phone: e.target.value })
-                    }
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
-                    placeholder="+1 555 0100"
+                    onChange={(next) => setForm({ ...form, phone: next })}
                   />
                 </div>
                 <div>
@@ -2274,10 +2291,9 @@ export default function ContactsPage() {
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Phone</label>
-                <input
+                <PhoneInput
                   value={editForm.phone}
-                  onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                  onChange={(next) => setEditForm((f) => ({ ...f, phone: next }))}
                 />
               </div>
               <div className="md:col-span-2">

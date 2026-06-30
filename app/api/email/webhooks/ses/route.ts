@@ -121,6 +121,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Final fallback: match purely by recipient email. Many older rows have no
+    // stored message_id (or were sent via a provider that didn't return one),
+    // so without this a real bounce can never flip the row off "sent" and the
+    // failure shows as if it went through. A hard bounce means the mailbox is
+    // dead everywhere, so updating every row for that address is correct.
+    if (!updated && recipientEmail) {
+      const [ownerRows] = await db.execute(
+        `SELECT c.user_id
+           FROM campaign_recipients cr
+           JOIN campaigns c ON c.id = cr.campaign_id
+          WHERE cr.email = ?
+          ORDER BY cr.id DESC
+          LIMIT 1`,
+        [String(recipientEmail).toLowerCase()]
+      );
+      const owner = (ownerRows as any[])[0];
+      if (owner) campaignOwnerId = owner.user_id;
+      const [res2] = await db.execute(
+        `UPDATE campaign_recipients SET ${sets.join(", ")} WHERE LOWER(email) = ?`,
+        [String(recipientEmail).toLowerCase()]
+      );
+      if (((res2 as any)?.affectedRows ?? 0) > 0) updated = true;
+    }
+
     // Auto-add to suppressions on permanent bounce / any complaint.
     // INSERT IGNORE so repeated SNS deliveries don't error.
     if (suppressionReason && campaignOwnerId && recipientEmail) {

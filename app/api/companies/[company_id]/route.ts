@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { cleanDepartments } from "@/lib/departments";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -74,6 +75,12 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
       metaPairs.push(`'$.${key}', ?`);
       metaVals.push(v === "" ? null : v);
     }
+  }
+  // Departments live as a JSON array under meta.departments. We accept an
+  // empty array too, so the user can clear every department on a company.
+  if ("departments" in body) {
+    metaPairs.push(`'$.departments', CAST(? AS JSON)`);
+    metaVals.push(JSON.stringify(cleanDepartments((body as any).departments)));
   }
   if (metaPairs.length) {
     sets.push(`meta = JSON_SET(COALESCE(meta, JSON_OBJECT()), ${metaPairs.join(", ")})`);

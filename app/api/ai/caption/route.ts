@@ -6,10 +6,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 export async function POST(req: NextRequest) {
   await requireUser();
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const { imageUrl, context = "" } = await req.json();
   if (!imageUrl) return NextResponse.json({ ok: false, error: "imageUrl required" }, { status: 400 });
 

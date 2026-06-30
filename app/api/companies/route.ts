@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
+import { cleanDepartments } from "@/lib/departments";
+import { getApprovedCompanyIds } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,6 +58,12 @@ export async function POST(req: NextRequest) {
     if (v !== null) meta[key] = v;
   }
 
+  // Departments (e.g. "LBI", "Research") are stored as a JSON array under
+  // meta.departments. Trim, drop blanks, and de-dupe case-insensitively while
+  // preserving the order the user entered them in.
+  const depts = cleanDepartments((body as any).departments);
+  if (depts.length) meta.departments = depts;
+
   await db.query(
     `INSERT INTO companies
        (company_id, user_id, company_name, industry, segment, size,
@@ -89,13 +97,26 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ data: [] }, { status: 401 });
 
   const url = new URL(req.url);
-  const limit = Math.min(Number(url.searchParams.get("limit") || 5000), 10000);
+  // Default high enough that dropdowns/pickers receive the full company list
+  // (they were silently capped at 5000 before). Hard ceiling guards the DB.
+  const limit = Math.min(Number(url.searchParams.get("limit") || 100000), 100000);
   const staffBypass = isStaff(session.role);
 
-  // Staff (admin + moderator) see every company; regular users only see rows they own
-  // PLUS legacy/global rows where user_id IS NULL (so they have something to start with).
-  const where = staffBypass ? "" : "WHERE c.user_id = ? OR c.user_id IS NULL";
-  const params: any[] = staffBypass ? [] : [session.id];
+  // Staff (admin + moderator) see every company; regular users see rows they own,
+  // legacy/global rows (user_id IS NULL), PLUS any company they're an approved
+  // member of (the company-access / join-request flow).
+  let where = "";
+  const params: any[] = [];
+  if (!staffBypass) {
+    const approved = await getApprovedCompanyIds(session.id);
+    const clauses = ["c.user_id = ?", "c.user_id IS NULL"];
+    params.push(session.id);
+    if (approved.length) {
+      clauses.push(`c.company_id IN (${approved.map(() => "?").join(", ")})`);
+      params.push(...approved);
+    }
+    where = `WHERE ${clauses.join(" OR ")}`;
+  }
 
   const [rows] = await db.query(
     `SELECT

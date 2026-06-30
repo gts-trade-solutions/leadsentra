@@ -21,13 +21,26 @@ export async function GET(
   const [companyRows] = await db.execute(
     `SELECT company_id, company_name, legal_name, trading_name, company_type, segment, size, website,
             head_office_address, city_regency, country, postal_code, phone_main, email_general,
-            linkedin, notes, company_profile, financial_reports, forecast_value
+            linkedin, notes, company_profile, financial_reports, forecast_value, meta
        FROM companies
       WHERE company_id = ?
       LIMIT 1`,
     [company_id]
   );
   const company = (companyRows as any[])[0] ?? null;
+
+  // Departments are stored as a JSON array under meta.departments.
+  let departments: string[] = [];
+  if (company?.meta) {
+    try {
+      const m = typeof company.meta === "string" ? JSON.parse(company.meta) : company.meta;
+      if (Array.isArray(m?.departments)) {
+        departments = m.departments.filter((d: unknown): d is string => typeof d === "string");
+      }
+    } catch {
+      /* malformed meta — treat as no departments */
+    }
+  }
 
   const [contactRows] = await db.execute(
     `SELECT id, contact_name, title, department, email, phone,
@@ -83,11 +96,15 @@ export async function GET(
 
   // Mask sensitive company fields if the corresponding asset isn't unlocked.
   const company_out = company
-    ? {
-        ...company,
-        financial_reports: assets.financials_unlocked ? company.financial_reports : null,
-        forecast_value: assets.forecast_unlocked ? company.forecast_value : null,
-      }
+    ? (() => {
+        const { meta: _meta, ...rest } = company as any;
+        return {
+          ...rest,
+          departments,
+          financial_reports: assets.financials_unlocked ? company.financial_reports : null,
+          forecast_value: assets.forecast_unlocked ? company.forecast_value : null,
+        };
+      })()
     : null;
 
   return NextResponse.json({

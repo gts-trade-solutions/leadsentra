@@ -78,3 +78,52 @@ export function htmlToText(html: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+/**
+ * Ensure an email body is well-formed, nicely-formatted HTML.
+ *
+ * If the body already contains HTML markup it's returned unchanged. If it's
+ * PLAIN TEXT (what you get when someone types a message without an HTML
+ * template), it is escaped, bare URLs/emails are linkified (so they're
+ * clickable AND click-trackable), line breaks are preserved, and the whole
+ * thing is wrapped in a clean, email-safe container. Without this, plain text
+ * collapses into one unformatted blob because HTML ignores newlines.
+ */
+export function ensureEmailHtml(body: string | null | undefined): string {
+  const raw = String(body ?? "");
+  if (!raw.trim()) return raw;
+
+  // Heuristic: does it already contain a real HTML tag (or a doctype)?
+  const looksLikeHtml = /<!doctype/i.test(raw) || /<([a-z][\w-]*)(\s[^>]*)?>/i.test(raw);
+  if (looksLikeHtml) return raw;
+
+  const escaped = raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Single pass linkify so URLs/emails aren't double-processed.
+  const linked = escaped.replace(
+    /(https?:\/\/[^\s<]+|www\.[^\s<]+|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/gi,
+    (m) => {
+      const style = 'color:#2563eb;text-decoration:underline;';
+      if (/^[A-Z0-9._%+-]+@/i.test(m)) {
+        return `<a href="mailto:${m}" style="${style}">${m}</a>`;
+      }
+      const href = m.toLowerCase().startsWith("www.") ? `http://${m}` : m;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="${style}">${m}</a>`;
+    }
+  );
+
+  // Preserve paragraphs (blank line) and single line breaks.
+  const withBreaks = linked.replace(/\r\n/g, "\n").replace(/\n/g, "<br>");
+
+  return `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#ffffff;">
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1f2937;max-width:640px;margin:0 auto;padding:16px;word-break:break-word;">
+${withBreaks}
+    </div>
+  </body>
+</html>`;
+}

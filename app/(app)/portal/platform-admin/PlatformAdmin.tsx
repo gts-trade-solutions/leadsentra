@@ -102,6 +102,18 @@ export default function PlatformAdmin() {
           <TabButton id="campaign" current={tab} onClick={setTab} icon={Mail}     label="Admin campaign" />
         </nav>
 
+        {isAdmin && (
+          <Link
+            href="/portal/platform-admin/requests"
+            className="mb-4 flex items-center justify-between gap-2 rounded-lg border border-emerald-800/50 bg-emerald-950/20 px-4 py-3 text-sm hover:border-emerald-600"
+          >
+            <span className="text-emerald-100">
+              <b>Company join requests</b> — review users requesting access to a company.
+            </span>
+            <span className="text-emerald-400">Open →</span>
+          </Link>
+        )}
+
         {tab === "overview" && <OverviewTab />}
         {tab === "users"    && <UsersTab isAdmin={isAdmin} />}
         {tab === "prices" && isAdmin && <PricesTab />}

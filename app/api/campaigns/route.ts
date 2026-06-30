@@ -75,6 +75,9 @@ export async function POST(req: Request) {
   // segment/country/company dropdowns).  Applied to 'all' and 'filtered' modes.
   const filterSegment   = String(audience.segment   || "").trim();
   const filterCountry   = String(audience.country   || "").trim();
+  // Department targeting (e.g. "LBI") — narrows to contacts whose `department`
+  // column matches. Used by the Catalogues & Offers send flow.
+  const filterDepartment = String(audience.department || "").trim();
   // company_ids (array, new) takes priority; company_id (single, legacy) is
   // still honored for any caller that hasn't migrated yet.
   const filterCompanyIds: string[] = Array.isArray(audience.company_ids)
@@ -158,8 +161,9 @@ export async function POST(req: Request) {
       where.push(`c.company_id IN (${filterCompanyIds.map(() => "?").join(",")})`);
       params.push(...filterCompanyIds);
     }
-    if (filterSegment)   { where.push("co.segment = ?");    params.push(filterSegment); }
-    if (filterCountry)   { where.push("co.country = ?");    params.push(filterCountry); }
+    if (filterSegment)    { where.push("co.segment = ?");   params.push(filterSegment); }
+    if (filterCountry)    { where.push("co.country = ?");   params.push(filterCountry); }
+    if (filterDepartment) { where.push("c.department = ?"); params.push(filterDepartment); }
 
     const fromParts: string[] = ["contacts c"];
     if (!callerIsStaff) fromParts.push("JOIN unlocked_contacts_v u ON u.contact_id = c.id");

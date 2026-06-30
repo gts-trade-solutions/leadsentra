@@ -241,21 +241,27 @@ export default function Tracking() {
           title="Email Tracking"
           description="Per-recipient delivery, opens, clicks, bounces and complaints across every campaign"
         >
-          <label className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-            />
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoRefresh}
+            onClick={() => setAutoRefresh((v) => !v)}
+            title="Automatically refresh the table every 30 seconds"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border whitespace-nowrap transition-colors ${
+              autoRefresh
+                ? "bg-emerald-600/15 border-emerald-600 text-emerald-300"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600"
+            }`}
+          >
             <span
               className={`inline-block w-2 h-2 rounded-full ${autoRefresh ? "bg-emerald-400 animate-pulse" : "bg-gray-500"}`}
             />
             Auto-refresh (30s)
-          </label>
+          </button>
           <button
             onClick={() => { fetchRows(); fetchCampaigns(); }}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium disabled:opacity-60"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium whitespace-nowrap disabled:opacity-60"
           >
             <RefreshCcw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
@@ -263,7 +269,7 @@ export default function Tracking() {
           <button
             onClick={suppressBounced}
             disabled={suppressBusy}
-            className="flex items-center gap-2 px-4 py-2 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-sm font-medium disabled:opacity-60"
+            className="flex items-center gap-2 px-4 py-2 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-sm font-medium whitespace-nowrap disabled:opacity-60"
             title="Add every bounced / complained recipient (in current filter) to the suppression list"
           >
             <ShieldOff className="w-4 h-4" />
@@ -271,14 +277,14 @@ export default function Tracking() {
           </button>
           <button
             onClick={exportCsv}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium whitespace-nowrap"
           >
             <Download className="w-4 h-4" />
             Export CSV
           </button>
           <Link
             href="/portal/campaigns"
-            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium whitespace-nowrap"
           >
             <ArrowLeft className="w-4 h-4" />
             Back

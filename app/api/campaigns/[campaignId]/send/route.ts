@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
-import { withTracking, htmlToText, unsubscribeUrl } from "@/lib/emailTracking";
+import { withTracking, htmlToText, ensureEmailHtml, unsubscribeUrl } from "@/lib/emailTracking";
 import { sendEmail } from "@/lib/emailProvider";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
 
@@ -78,7 +78,9 @@ export async function POST(
   }
 
   const subject = body.subject ?? campaignRow.subject;
-  const baseHtml = body.html ?? campaignRow.html;
+  // Plain-text bodies (no HTML template) are wrapped into clean, formatted HTML
+  // so line breaks/links render properly instead of collapsing into one blob.
+  const baseHtml = ensureEmailHtml(body.html ?? campaignRow.html);
   const fromEmail =
     body.fromEmail ?? campaignRow.from_email ?? process.env.DEFAULT_FROM_EMAIL;
   // Prefer the name saved on the campaign (chosen in the "Send from" picker),
@@ -260,9 +262,13 @@ export async function POST(
         unsubscribeUrl: unsubscribeUrl(token, baseUrl),
         campaignId,
       });
+      // "sent" = accepted by the mail provider for delivery. We do NOT claim
+      // "delivered" here — that's only true once the provider's Delivery webhook
+      // confirms it. A bounce/complaint webhook (or the suppression backfill)
+      // flips this to 'bounced'/'complained' so failed mail never shows as ok.
       await db.execute(
         `UPDATE campaign_recipients
-            SET message_id = ?, status = 'delivered', last_event_at = NOW()
+            SET message_id = ?, status = 'sent', last_event_at = NOW()
           WHERE id = ?`,
         [resp.id, r.id]
       );
@@ -303,9 +309,9 @@ export async function POST(
   // Decide the final campaign status from real DB state.
   const [remRows] = await db.execute(
     `SELECT
-        SUM(CASE WHEN status = 'queued'    THEN 1 ELSE 0 END) AS remaining_queued,
-        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered_count,
-        SUM(CASE WHEN status = 'failed'    THEN 1 ELSE 0 END) AS failed_count
+        SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS remaining_queued,
+        SUM(CASE WHEN status IN ('sent','delivered','opened','clicked') THEN 1 ELSE 0 END) AS delivered_count,
+        SUM(CASE WHEN status IN ('failed','bounced','complained') THEN 1 ELSE 0 END) AS failed_count
        FROM campaign_recipients
       WHERE campaign_id = ?`,
     [campaignId]

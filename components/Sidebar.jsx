@@ -28,6 +28,8 @@ import {
   MessageSquare,
   Activity,
   Mail,
+  BookOpen,
+  ClipboardCheck,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
@@ -47,6 +49,7 @@ const ALL_ITEMS = [
   // Lead Generation
   { name: "Dashboard", href: "/app", icon: BarChart3, comingSoon: true },
   { name: "Companies", href: "/portal/companies", icon: Building2 },
+  { name: "Company Access", href: "/portal/company-access", icon: UserCheck },
   { name: "Contacts", href: "/portal/contacts", icon: Users },
   { name: "Contact ID Manager", href: "/portal/contact-id-manager", icon: UserCheck, comingSoon: true },
   { name: "Import Failures", href: "/portal/import-failures", icon: AlertCircle, comingSoon: true },
@@ -62,6 +65,11 @@ const ALL_ITEMS = [
       { name: "Suppressions", href: "/portal/campaigns/suppressions", icon: ShieldOff },
     ],
   },
+  { name: "Inbox", href: "/portal/inbox", icon: Mail },
+  { name: "Catalogues & Offers", href: "/portal/catalogues", icon: BookOpen },
+  { name: "Proforma Invoices", href: "/portal/invoices", icon: FileText },
+  { name: "Orders", href: "/portal/orders", icon: ClipboardCheck },
+  { name: "Offer Analytics", href: "/portal/offer-analytics", icon: LineChart },
   { name: "Sequences", href: "/portal/sequences", icon: Workflow, comingSoon: true },
 
   // Relationship Management

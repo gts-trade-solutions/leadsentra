@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { validatePassword } from "@/lib/password";
 import { signSession, setSessionCookie } from "@/lib/auth";
 import { checkLoginRate, loginRateKey } from "@/lib/rateLimit";
+import { requestMembership } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,6 +38,7 @@ export async function POST(req: Request) {
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
   const full_name = body.full_name ? String(body.full_name).trim() : null;
+  const joinCompanyId = body.company_id ? String(body.company_id).trim().slice(0, 36) : null;
 
   if (!email || !password) {
     return NextResponse.json({ error: "Email and password required" }, { status: 400 });
@@ -48,6 +50,18 @@ export async function POST(req: Request) {
   const pwError = validatePassword(password);
   if (pwError) {
     return NextResponse.json({ error: pwError }, { status: 400 });
+  }
+
+  // Company to join is required at signup.
+  if (!joinCompanyId) {
+    return NextResponse.json({ error: "Please choose the company you want to join." }, { status: 400 });
+  }
+  const [companyRows] = await db.execute(
+    "SELECT company_id FROM companies WHERE company_id = ? LIMIT 1",
+    [joinCompanyId]
+  );
+  if (!(companyRows as any[]).length) {
+    return NextResponse.json({ error: "That company was not found. Please pick one from the list." }, { status: 400 });
   }
 
   // Throttle so a script can't flood signups.
@@ -118,6 +132,18 @@ export async function POST(req: Request) {
     conn.release();
   }
 
+  // If the user picked a company to join at signup, raise a pending request
+  // (admin approves later). Best-effort: never block account creation on it.
+  let joinRequested = false;
+  if (joinCompanyId) {
+    try {
+      const r = await requestMembership(id, joinCompanyId);
+      joinRequested = "status" in r;
+    } catch (e) {
+      console.error("[register] join request failed", e);
+    }
+  }
+
   // Auto-sign-in — set the session cookie so the client lands on the portal
   // already authenticated.
   const sessionToken = signSession({ id, email, role: "user" });
@@ -126,5 +152,6 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     user: { id, email, full_name, role: "user" },
+    joinRequested,
   });
 }

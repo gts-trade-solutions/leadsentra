@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { isEmailShape } from "@/lib/suppressions";
+import { accessibleCompanyFilter } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,16 @@ export async function GET(req: Request) {
   // meta JSON for any legacy rows that were written before the migration
   // landed — or to rows written briefly today while POST was routing data
   // through the JSON instead of columns.
+  // Non-staff users only see contacts under a company they can access (own /
+  // global / approved-member) or contacts they created themselves. Staff see all.
+  let accessSql = "";
+  let accessParams: any[] = [];
+  if (!staffBypass) {
+    const f = await accessibleCompanyFilter(session.id, "c", "co");
+    accessSql = `AND ${f.sql}`;
+    accessParams = f.params;
+  }
+
   const sql = `SELECT
         c.id,
         c.contact_name AS name,
@@ -91,6 +102,8 @@ export async function GET(req: Request) {
         COALESCE(c.instagram_url, JSON_UNQUOTE(JSON_EXTRACT(c.meta, '$.instagram_url'))) AS instagram_url,
         co.company_name AS company,
         co.country     AS country,
+        co.website     AS website,
+        co.linkedin    AS company_linkedin,
         co.segment     AS segment,
         c.company_id,
         c.created_at,
@@ -98,12 +111,13 @@ export async function GET(req: Request) {
      FROM contacts c
      LEFT JOIN companies co ON co.company_id = c.company_id
      ${unlockJoin}
-     WHERE ? = '' OR c.contact_name LIKE ? OR c.email LIKE ? OR co.company_name LIKE ?
+     WHERE (? = '' OR c.contact_name LIKE ? OR c.email LIKE ? OR co.company_name LIKE ?)
+     ${accessSql}
      ORDER BY c.created_at DESC
      LIMIT ${limit} OFFSET ${offset}`;
   const params = staffBypass
     ? [search, like, like, like]
-    : [session.id, search, like, like, like];
+    : [session.id, search, like, like, like, ...accessParams];
 
   const [rows] = await db.execute(sql, params);
   return NextResponse.json({ data: rows });

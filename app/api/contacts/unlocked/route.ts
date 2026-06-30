@@ -32,6 +32,7 @@ export async function GET(req: Request) {
   const q          = (url.searchParams.get("q") || "").trim().toLowerCase();
   const segment    = (url.searchParams.get("segment") || "").trim();
   const country    = (url.searchParams.get("country") || "").trim();
+  const department = (url.searchParams.get("department") || "").trim();
   // Multi-select aware: caller can pass company_id repeatedly (?company_id=a&company_id=b)
   // or as a comma-separated single value (?company_id=a,b). Both legacy single-value
   // callers and the new multi-select Audience picker round-trip cleanly.
@@ -74,6 +75,10 @@ export async function GET(req: Request) {
   if (country) {
     where.push("co.country = ?");
     params.push(country);
+  }
+  if (department) {
+    where.push("c.department = ?");
+    params.push(department);
   }
 
   // ---------- FROM ----------

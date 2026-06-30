@@ -41,13 +41,40 @@ export async function POST(req: Request) {
         vals
       );
     } else if (toEmail) {
-      vals.push(toEmail);
+      vals.push(String(toEmail).toLowerCase());
       await db.execute(
-        `UPDATE campaign_recipients SET ${sets.join(", ")} WHERE email = ?`,
+        `UPDATE campaign_recipients SET ${sets.join(", ")} WHERE LOWER(email) = ?`,
         vals
       );
     } else {
       return NextResponse.json({ ok: false, error: "Missing id and recipient" }, { status: 400 });
+    }
+
+    // On a bounce/complaint, add the address to the owner's suppression list so
+    // future campaigns skip it (mirrors the SES webhook behaviour).
+    if (newStatus === "bounced" || newStatus === "complained") {
+      const [ownerRows] = await db.execute(
+        `SELECT c.user_id, cr.email
+           FROM campaign_recipients cr
+           JOIN campaigns c ON c.id = cr.campaign_id
+          WHERE ${providerId ? "cr.message_id = ?" : "LOWER(cr.email) = ?"}
+          ORDER BY cr.id DESC
+          LIMIT 1`,
+        [providerId ? providerId : String(toEmail).toLowerCase()]
+      );
+      const owner = (ownerRows as any[])[0];
+      if (owner?.user_id && owner?.email) {
+        await db.execute(
+          `INSERT IGNORE INTO suppressions (user_id, type, value, reason, source)
+           VALUES (?, 'email', ?, ?, ?)`,
+          [
+            owner.user_id,
+            String(owner.email).toLowerCase(),
+            `Resend ${newStatus} notification`,
+            newStatus === "bounced" ? "bounce" : "complaint",
+          ]
+        );
+      }
     }
 
     return NextResponse.json({ ok: true });

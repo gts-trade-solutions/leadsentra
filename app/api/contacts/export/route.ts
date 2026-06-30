@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { accessibleCompanyFilter } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,8 +19,13 @@ export async function GET() {
   if (!session) return new Response("Unauthorized", { status: 401 });
 
   const isAdmin = session.role === "admin";
-  const where = isAdmin ? "" : "WHERE c.user_id = ? OR c.user_id IS NULL";
-  const params: any[] = isAdmin ? [] : [session.id];
+  let where = "";
+  let params: any[] = [];
+  if (!isAdmin) {
+    const f = await accessibleCompanyFilter(session.id, "c", "co");
+    where = `WHERE ${f.sql}`;
+    params = f.params;
+  }
 
   const [rows] = await db.execute(
     `SELECT c.id, c.contact_name AS name, c.email, c.title, c.phone,

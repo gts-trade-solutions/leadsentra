@@ -13,7 +13,29 @@ type SendArgs = {
   /** Campaign id, surfaced in the Feedback-ID header so Gmail Postmaster
    *  Tools can break out reputation per-campaign.  Optional but recommended. */
   campaignId?: string;
+  /** Threading: the original message's Message-ID, set as In-Reply-To on a
+   *  reply so it slots into the same conversation in the recipient's client. */
+  inReplyTo?: string;
+  /** Threading: the References chain (space-separated Message-IDs). */
+  references?: string;
+  /** File attachments. `content` is base64-encoded bytes.  Used by the
+   *  proforma-invoice send to attach the generated PDF. */
+  attachments?: EmailAttachment[];
 };
+
+export type EmailAttachment = {
+  filename: string;
+  /** Base64-encoded file bytes. */
+  content: string;
+  /** MIME type, e.g. "application/pdf".  Defaults to application/octet-stream. */
+  contentType?: string;
+};
+
+/** Wrap a base64 string to 76-char lines as required by RFC 2045 for the
+ *  base64 Content-Transfer-Encoding in a raw MIME message. */
+function wrapBase64(b64: string): string {
+  return (b64.match(/.{1,76}/g) || []).join("\r\n");
+}
 
 // Free mail providers — sending FROM these domains via SES/Resend fails
 // DMARC at the receiver because the From-domain doesn't match the signing
@@ -99,7 +121,7 @@ export async function sendEmail(args: SendArgs): Promise<{ id: string | null }> 
 }
 
 // ---------- AWS SES v2 ----------
-async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId }: SendArgs) {
+async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, inReplyTo, references, attachments }: SendArgs) {
   const { SESv2Client, SendEmailCommand } = await import("@aws-sdk/client-sesv2");
   const ses = new SESv2Client({
     region: process.env.SES_REGION || process.env.AWS_REGION || "us-east-1",
@@ -113,20 +135,29 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
   const body: any = { Html: { Data: html } };
   if (text) body.Text = { Data: text };
 
-  // SES SimpleEmail can't attach arbitrary headers, so when we need List-Unsubscribe
-  // (for bulk-sender compliance) we fall back to the Raw email API.  This is the
+  // SES SimpleEmail can't attach arbitrary headers, so when we need extra
+  // headers — List-Unsubscribe (bulk compliance) OR threading (In-Reply-To /
+  // References on a reply) — we fall back to the Raw email API.  This is the
   // recommended path per AWS docs once you go beyond a basic Html body.
-  if (unsubscribeUrl) {
+  //
+  // `isBulk` distinguishes a campaign blast (gets List-Unsubscribe, Feedback-ID,
+  // Precedence: bulk, Auto-Submitted) from a personal reply (must NOT carry
+  // those, or it looks like automated bulk and breaks threading/etiquette).
+  const isThreadedReply = !!(inReplyTo || references);
+  const isBulk = !!unsubscribeUrl || (!!campaignId && !isThreadedReply);
+  const hasAttachments = !!(attachments && attachments.length);
+  const needsRaw = isBulk || isThreadedReply || hasAttachments;
+  if (needsRaw) {
     const boundary = `bnd_${Math.random().toString(36).slice(2)}`;
     const fromHeader = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
     // Spam filters look for a real-looking Message-ID.  Use the sender's domain
     // (or a fallback) so it's anchored to a verified identity.
     const fromDomain = (fromEmail.split("@")[1] || "leadsentra.local").toLowerCase();
     const messageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${fromDomain}>`;
-    const replyTo = process.env.EMAIL_REPLY_TO || fromEmail;
+    // For a reply, route follow-ups back to the sending mailbox itself.
+    const replyTo = isThreadedReply ? fromEmail : process.env.EMAIL_REPLY_TO || fromEmail;
     // Feedback-ID: Gmail Postmaster Tools breaks down reputation per-campaign
     // using this header.  Format recommended by Google: <campaign>:<customer>:<type>:<sender>
-    // Stable per campaign — helps spot which campaigns trigger complaints.
     const feedbackId = [
       campaignId ? `c-${campaignId.slice(0, 8)}` : "default",
       "leadsentra",
@@ -138,24 +169,38 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
     lines.push(`From: ${fromHeader}`);
     lines.push(`To: ${to}`);
     lines.push(`Reply-To: ${replyTo}`);
-    // Sender header — for downstream relays / Gmail's "via" notice; matches From
-    // when no specific sender override is set.  Some receivers expect this.
-    lines.push(`Sender: ${fromEmail}`);
     lines.push(`Subject: ${encodeMimeHeader(subject)}`);
     lines.push(`Message-ID: ${messageId}`);
     lines.push(`Date: ${new Date().toUTCString()}`);
+    // Threading headers — make the reply join the original conversation.
+    if (inReplyTo) lines.push(`In-Reply-To: ${inReplyTo}`);
+    if (references) lines.push(`References: ${references}`);
     lines.push("MIME-Version: 1.0");
     lines.push("X-Mailer: LeadSentra (Next.js + SES)");
-    // Bulk-sender compliance (Gmail/Yahoo, Feb 2024+):
-    lines.push(`List-Unsubscribe: <${unsubscribeUrl}>`);
-    lines.push("List-Unsubscribe-Post: List-Unsubscribe=One-Click");
-    // Gmail Postmaster Tools: per-campaign reputation tracking.
-    lines.push(`Feedback-ID: ${feedbackId}`);
-    // Precedence: bulk tells some MTAs not to send auto-replies to this mail.
-    lines.push("Precedence: bulk");
-    // Auto-Submitted: identify as automated bulk; suppresses out-of-office replies.
-    lines.push("Auto-Submitted: auto-generated");
-    if (campaignId) lines.push(`X-Entity-Ref-ID: ${campaignId}`);
+    if (isBulk) {
+      // Sender header — for downstream relays / Gmail's "via" notice.
+      lines.push(`Sender: ${fromEmail}`);
+      // Bulk-sender compliance (Gmail/Yahoo, Feb 2024+):
+      if (unsubscribeUrl) {
+        lines.push(`List-Unsubscribe: <${unsubscribeUrl}>`);
+        lines.push("List-Unsubscribe-Post: List-Unsubscribe=One-Click");
+      }
+      // Gmail Postmaster Tools: per-campaign reputation tracking.
+      lines.push(`Feedback-ID: ${feedbackId}`);
+      // Precedence: bulk tells some MTAs not to send auto-replies to this mail.
+      lines.push("Precedence: bulk");
+      // Auto-Submitted: identify as automated bulk; suppresses out-of-office replies.
+      lines.push("Auto-Submitted: auto-generated");
+      if (campaignId) lines.push(`X-Entity-Ref-ID: ${campaignId}`);
+    }
+    // When there are attachments we wrap the text/html alternative inside a
+    // multipart/mixed container and append each attachment as a base64 part.
+    const mixedBoundary = `mix_${Math.random().toString(36).slice(2)}`;
+    if (hasAttachments) {
+      lines.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`);
+      lines.push("");
+      lines.push(`--${mixedBoundary}`);
+    }
     lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     lines.push("");
     if (text) {
@@ -175,6 +220,20 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
     lines.push(toQuotedPrintable(html));
     lines.push("");
     lines.push(`--${boundary}--`);
+    if (hasAttachments) {
+      for (const att of attachments!) {
+        const ctype = att.contentType || "application/octet-stream";
+        const name = att.filename.replace(/"/g, "");
+        lines.push(`--${mixedBoundary}`);
+        lines.push(`Content-Type: ${ctype}; name="${name}"`);
+        lines.push("Content-Transfer-Encoding: base64");
+        lines.push(`Content-Disposition: attachment; filename="${name}"`);
+        lines.push("");
+        lines.push(wrapBase64(att.content));
+        lines.push("");
+      }
+      lines.push(`--${mixedBoundary}--`);
+    }
     const raw = new TextEncoder().encode(lines.join("\r\n"));
 
     const resp = await ses.send(
@@ -260,9 +319,11 @@ function toQuotedPrintable(input: string): string {
 }
 
 // ---------- Resend ----------
-async function sendWithResend({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId }: SendArgs) {
+async function sendWithResend({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, inReplyTo, references, attachments }: SendArgs) {
   const { Resend } = await import("resend");
   const resend = new Resend(process.env.RESEND_API_KEY!);
+  const isThreadedReply = !!(inReplyTo || references);
+  const isBulk = !!unsubscribeUrl || (!!campaignId && !isThreadedReply);
   const payload: any = {
     from: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
     to,
@@ -270,28 +331,43 @@ async function sendWithResend({ to, subject, html, fromEmail, fromName, text, un
     html,
   };
   if (text) payload.text = text;
-  // Reply-To improves deliverability slightly and keeps replies routed to a
-  // monitored inbox.  Defaults to the sender if EMAIL_REPLY_TO isn't configured.
-  payload.reply_to = process.env.EMAIL_REPLY_TO || fromEmail;
+  // Resend takes attachments as { filename, content } where content is a
+  // base64 string (or Buffer).  We pass base64 to match the SES path.
+  if (attachments && attachments.length) {
+    payload.attachments = attachments.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      contentType: a.contentType,
+    }));
+  }
+  // For a reply, route follow-ups back to the sending mailbox.  Otherwise keep
+  // the campaign behaviour (monitored reply box if configured).
+  payload.reply_to = isThreadedReply ? fromEmail : process.env.EMAIL_REPLY_TO || fromEmail;
 
   const fromDomain = (fromEmail.split("@")[1] || "leadsentra.local").toLowerCase();
-  const feedbackId = [
-    campaignId ? `c-${campaignId.slice(0, 8)}` : "default",
-    "leadsentra",
-    "mkt",
-    fromDomain.replace(/\./g, "_"),
-  ].join(":");
   const headers: Record<string, string> = {
-    "Precedence": "bulk",
     "X-Mailer": "LeadSentra (Next.js + Resend)",
-    "Auto-Submitted": "auto-generated",
-    "Feedback-ID": feedbackId,
   };
-  if (unsubscribeUrl) {
-    headers["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
-    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  // Threading headers — only on replies.
+  if (inReplyTo) headers["In-Reply-To"] = inReplyTo;
+  if (references) headers["References"] = references;
+  // Bulk-only headers — never on a personal reply.
+  if (isBulk) {
+    const feedbackId = [
+      campaignId ? `c-${campaignId.slice(0, 8)}` : "default",
+      "leadsentra",
+      "mkt",
+      fromDomain.replace(/\./g, "_"),
+    ].join(":");
+    headers["Precedence"] = "bulk";
+    headers["Auto-Submitted"] = "auto-generated";
+    headers["Feedback-ID"] = feedbackId;
+    if (unsubscribeUrl) {
+      headers["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
+      headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+    }
+    if (campaignId) headers["X-Entity-Ref-ID"] = campaignId;
   }
-  if (campaignId) headers["X-Entity-Ref-ID"] = campaignId;
   payload.headers = headers;
 
   const resp = await resend.emails.send(payload);

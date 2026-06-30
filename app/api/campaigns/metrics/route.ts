@@ -33,7 +33,9 @@ export async function POST(req: Request) {
     if (!a) continue;
     a.recipients++;
     if (r.status === "queued") a.queued++;
-    if (r.status === "delivered") a.delivered++;
+    // "delivered" here means "successfully handed to the provider" — sent,
+    // delivered, opened, clicked all count. Bounced/complained are failures.
+    if (["sent", "delivered", "opened", "clicked"].includes(r.status)) a.delivered++;
     if (r.status === "bounced" || r.status === "complained") a.bounced++;
     a.opens_total += Number(r.opens_count || 0);
     a.clicks_total += Number(r.clicks_count || 0);

@@ -48,17 +48,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
   }
 
-  // Email verification gate (only after a successful password check, so we
-  // don't reveal whether an email exists by varying the response).
-  if (!user.email_verified) {
-    return NextResponse.json(
-      {
-        error: "Please verify your email before signing in.",
-        code: "email_not_verified",
-      },
-      { status: 403 }
-    );
-  }
+  // Email verification is not required to sign in.
 
   const token = signSession({ id: user.id, email: user.email, role: user.role });
   setSessionCookie(token);

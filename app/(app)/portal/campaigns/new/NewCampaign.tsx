@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { ensureEmailHtml } from "@/lib/emailTracking";
 import {
   ArrowLeft,
   Mail,
@@ -166,6 +167,11 @@ export default function NewCampaign() {
   const [filterSegment, setFilterSegment] = useState("");
   const [filterCountry, setFilterCountry] = useState("");
   const [filterCompanyIds, setFilterCompanyIds] = useState<string[]>([]);
+  // Department targeting — set by the Catalogues & Offers "Send" hand-off
+  // (e.g. Race Innovations › LBI). Applied to 'all' and 'filtered' modes.
+  const [filterDepartment, setFilterDepartment] = useState("");
+  // Friendly label for the catalogue prefill banner (company › department).
+  const [catalogueTarget, setCatalogueTarget] = useState<string | null>(null);
   const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
   const companyMenuRef = useRef<HTMLDivElement | null>(null);
@@ -267,6 +273,45 @@ export default function NewCampaign() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminMode]);
 
+  // Catalogue/Offer hand-off: the Catalogues & Offers page stashes the chosen
+  // item's content + targeting in sessionStorage, then navigates here. We read
+  // it once on mount to prefill the composer, then clear it so a refresh won't
+  // re-apply it.
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem("leadsentra:catalogue_send");
+      if (raw) sessionStorage.removeItem("leadsentra:catalogue_send");
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    try {
+      const h = JSON.parse(raw);
+      if (h?.title) setCampaignName(String(h.title));
+      if (h?.subject) setSubject(String(h.subject));
+      if (h?.html) setContent(String(h.html));
+      const companyId = String(h?.company_id || "");
+      const department = String(h?.department || "");
+      if (companyId) {
+        // Target this company (and department, if any).
+        setMode("filtered");
+        setFilterCompanyIds([companyId]);
+        if (department) setFilterDepartment(department);
+        setCatalogueTarget(
+          `${h?.company_name || "Selected company"}${department ? ` › ${department}` : ""}`
+        );
+      } else {
+        // "All companies (overall)" — send to everyone.
+        setMode("all");
+        setCatalogueTarget("All companies (overall)");
+      }
+    } catch {
+      /* malformed hand-off — ignore */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-poll SES while the sender is pending — covers the case where the user
   // clicks the AWS verification link in another tab and returns to this page.
   // Silent: no toasts, no busy flag.  Stops as soon as we observe `verified`.
@@ -323,8 +368,9 @@ export default function NewCampaign() {
     try {
       const u = new URL("/api/contacts/unlocked", window.location.origin);
       u.searchParams.set("count", "only");
-      if (filterSegment)   u.searchParams.set("segment", filterSegment);
-      if (filterCountry)   u.searchParams.set("country", filterCountry);
+      if (filterSegment)    u.searchParams.set("segment", filterSegment);
+      if (filterCountry)    u.searchParams.set("country", filterCountry);
+      if (filterDepartment) u.searchParams.set("department", filterDepartment);
       // Multi-select: append company_id once per selected id.
       filterCompanyIds.forEach((id) => u.searchParams.append("company_id", id));
       const res = await fetch(u.toString(), { credentials: "same-origin", cache: "no-store" });
@@ -359,8 +405,9 @@ export default function NewCampaign() {
         url.searchParams.set("limit", String(PAGE_SIZE));
         url.searchParams.set("offset", String(offset));
         if (q) url.searchParams.set("q", q);
-        if (filterSegment)   url.searchParams.set("segment", filterSegment);
-        if (filterCountry)   url.searchParams.set("country", filterCountry);
+        if (filterSegment)    url.searchParams.set("segment", filterSegment);
+        if (filterCountry)    url.searchParams.set("country", filterCountry);
+        if (filterDepartment) url.searchParams.set("department", filterDepartment);
         filterCompanyIds.forEach((id) => url.searchParams.append("company_id", id));
         const res = await fetch(url.toString(), { credentials: "same-origin", cache: "no-store" });
         const data = await res.json().catch(() => ({}));
@@ -376,7 +423,7 @@ export default function NewCampaign() {
         setRecLoading(false);
       }
     },
-    [filterSegment, filterCountry, filterCompanyIds]
+    [filterSegment, filterCountry, filterCompanyIds, filterDepartment]
   );
 
   // Reload when search, mode, or any structured filter changes.
@@ -394,7 +441,7 @@ export default function NewCampaign() {
     }, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, recSearch, loadPage, filterSegment, filterCountry, filterCompanyIds]);
+  }, [mode, recSearch, loadPage, filterSegment, filterCountry, filterCompanyIds, filterDepartment]);
 
   // Hydrate names/emails for the chips shown in "Selected" mode.
   useEffect(() => {
@@ -453,7 +500,7 @@ export default function NewCampaign() {
     }, 400);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, selectedIds, recSearch, adminMode, allContactsTotal, unlockedTotal, filteredTotal, filterSegment, filterCountry, filterCompanyIds]);
+  }, [mode, selectedIds, recSearch, adminMode, allContactsTotal, unlockedTotal, filteredTotal, filterSegment, filterCountry, filterCompanyIds, filterDepartment]);
 
   const recipientsToSend = adminMode
     ? allContactsTotal
@@ -494,6 +541,7 @@ export default function NewCampaign() {
     if (filterSegment)              filters.segment     = filterSegment;
     if (filterCountry)              filters.country     = filterCountry;
     if (filterCompanyIds.length)    filters.company_ids = filterCompanyIds;
+    if (filterDepartment)           filters.department  = filterDepartment;
 
     if (mode === "selected") {
       return { mode: "selected", contact_ids: Array.from(selectedIds) };
@@ -1003,6 +1051,29 @@ export default function NewCampaign() {
 
         {/* Audience card */}
         <Card title="Audience" icon={<Mail className="w-5 h-5 text-emerald-400" />}>
+          {/* Catalogue/Offer hand-off banner — shows the targeting that was
+              prefilled from the Catalogues & Offers page, and lets the user
+              drop the department narrowing if they want a wider send. */}
+          {catalogueTarget && (
+            <div className="mb-3 rounded-lg border border-emerald-800/50 bg-emerald-950/20 px-3 py-2 flex items-center justify-between gap-3">
+              <div className="text-sm text-emerald-100">
+                Prefilled from catalogue — targeting{" "}
+                <b className="text-white">{catalogueTarget}</b>
+              </div>
+              {filterDepartment && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterDepartment("");
+                    setCatalogueTarget((t) => (t ? t.split(" › ")[0] : t));
+                  }}
+                  className="text-xs text-emerald-300 hover:text-emerald-200 underline whitespace-nowrap"
+                >
+                  Send to whole company
+                </button>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
               <div className="block text-sm text-gray-300 mb-1">Send to</div>
@@ -1200,8 +1271,8 @@ export default function NewCampaign() {
               <div className="flex items-end gap-2">
                 <button
                   type="button"
-                  onClick={() => { setFilterSegment(""); setFilterCountry(""); setFilterCompanyIds([]); }}
-                  disabled={!filterSegment && !filterCountry && filterCompanyIds.length === 0}
+                  onClick={() => { setFilterSegment(""); setFilterCountry(""); setFilterCompanyIds([]); setFilterDepartment(""); setCatalogueTarget(null); }}
+                  disabled={!filterSegment && !filterCountry && filterCompanyIds.length === 0 && !filterDepartment}
                   className="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
                 >
                   Clear filters
@@ -1641,6 +1712,11 @@ function buildPreviewHtml(body: string): string {
   const preview = (body || "")
     .replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, "#unsubscribe")
     .replace(/\{\{\s*unsubscribe_link\s*\}\}/gi, "#unsubscribe");
+  // Plain-text body? Preview it exactly as it will be sent (formatted HTML),
+  // so the user sees the real result before sending. ensureEmailHtml returns
+  // HTML bodies unchanged.
+  const isHtml = /<!doctype/i.test(preview) || /<([a-z][\w-]*)(\s[^>]*)?>/i.test(preview);
+  if (preview.trim() && !isHtml) return ensureEmailHtml(preview);
   return `<!doctype html><html><head><meta charset="utf-8">
 <style>
   body { font-family: Arial, Helvetica, sans-serif; color:#111; background:#fff;

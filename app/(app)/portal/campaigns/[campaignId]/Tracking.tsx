@@ -160,14 +160,23 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
               : "Recipient activity"
           }
         >
-          <label className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoRefresh}
+            onClick={() => setAutoRefresh((v) => !v)}
+            title="Automatically refresh the table every 15 seconds"
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border whitespace-nowrap transition-colors ${
+              autoRefresh
+                ? "bg-emerald-600/15 border-emerald-600 text-emerald-300"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600"
+            }`}
+          >
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${autoRefresh ? "bg-emerald-400 animate-pulse" : "bg-gray-500"}`}
             />
             Auto-refresh (15s)
-          </label>
+          </button>
           <button
             onClick={load}
             disabled={loading}

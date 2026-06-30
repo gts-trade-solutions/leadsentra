@@ -8,11 +8,14 @@ import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
 import SelectAllCheckbox from "@/components/SelectAllCheckbox";
+import PhoneInput from "@/components/PhoneInput";
+import { externalUrl } from "@/lib/url";
 import {
   Plus,
   Upload,
   RefreshCcw,
   Linkedin,
+  Globe,
   Facebook,
   Instagram,
   Shield,
@@ -110,6 +113,7 @@ type CompanyFull = {
   company_profile?: string | null;
   financial_reports?: string | null; // link or text
   forecast_value?: number | null; // numeric forecast
+  departments?: string[] | null; // e.g. ["LBI", "Research"]
 };
 
 type ContactMini = {
@@ -182,9 +186,10 @@ export default function CompaniesPage() {
         ]
       : []),
     "Company Name",
+    "Company ID",
     "Company Type",
     "Region",
-    "Location",
+    "Country",
     "Contacts",
     "Actions",
   ];
@@ -305,6 +310,7 @@ export default function CompaniesPage() {
     website: "",
     linkedin: "",
     country: "",
+    departments: [] as string[],
   });
 
   async function openCompanyEdit(r: Row) {
@@ -322,6 +328,7 @@ export default function CompaniesPage() {
       website: "",
       linkedin: "",
       country: r.country || r.location || "",
+      departments: [],
     });
     // Best-effort: pull the full record to fill segment/website/linkedin
     // and anything else the list query doesn't return.
@@ -344,6 +351,7 @@ export default function CompaniesPage() {
           website: c.website || f.website,
           linkedin: c.linkedin || f.linkedin,
           country: c.country || f.country,
+          departments: Array.isArray(c.departments) ? c.departments : f.departments,
         }));
       }
     } catch {
@@ -370,6 +378,7 @@ export default function CompaniesPage() {
           website: editCompanyForm.website.trim(),
           linkedin: editCompanyForm.linkedin.trim(),
           country: editCompanyForm.country.trim(),
+          departments: editCompanyForm.departments,
         }),
       });
       const j = await res.json().catch(() => ({}));
@@ -404,6 +413,7 @@ export default function CompaniesPage() {
     company_profile: "",
     financial_reports: "",
     forecast_value: "",
+    departments: [] as string[],
   });
   // NEW: credit balance + confirm dialog
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -794,9 +804,15 @@ export default function CompaniesPage() {
         {r.name}
       </button>
     ),
+    companyId: (
+      <span className="font-mono text-xs text-gray-400" title={r.company_id}>
+        {r.company_id}
+      </span>
+    ),
     companyType: r.companyType || "—",
     // Header reads "Region"; backed by companies.meta.city_regency.
     region: r.city_regency || "—",
+    // Header reads "Country"; backed by companies.country (see load()).
     location: r.location || "—",
     contacts: (
       <button
@@ -1489,12 +1505,9 @@ export default function CompaniesPage() {
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Phone</label>
-                <input
-                  type="tel"
+                <PhoneInput
                   value={editCompanyForm.phone}
-                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, phone: e.target.value }))}
-                  placeholder="+1 555 0100"
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                  onChange={(next) => setEditCompanyForm((f) => ({ ...f, phone: next }))}
                 />
               </div>
               <div className="md:col-span-2">
@@ -1511,6 +1524,13 @@ export default function CompaniesPage() {
                   value={editCompanyForm.linkedin}
                   onChange={(e) => setEditCompanyForm((f) => ({ ...f, linkedin: e.target.value }))}
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Departments</label>
+                <DepartmentsEditor
+                  value={editCompanyForm.departments}
+                  onChange={(next) => setEditCompanyForm((f) => ({ ...f, departments: next }))}
                 />
               </div>
             </div>
@@ -1562,14 +1582,14 @@ export default function CompaniesPage() {
                 <Info
                   label="Website"
                   value={
-                    companyFull.website ? (
+                    externalUrl(companyFull.website) ? (
                       <a
-                        className="text-emerald-400 hover:underline"
-                        href={companyFull.website}
+                        className="inline-flex items-center gap-1 text-sky-400 hover:underline"
+                        href={externalUrl(companyFull.website)!}
                         target="_blank"
                         rel="noreferrer"
                       >
-                        {companyFull.website}
+                        <Globe className="w-4 h-4" /> {companyFull.website}
                       </a>
                     ) : (
                       ""
@@ -1585,14 +1605,14 @@ export default function CompaniesPage() {
                 <Info
                   label="LinkedIn"
                   value={
-                    companyFull.linkedin ? (
+                    externalUrl(companyFull.linkedin) ? (
                       <a
                         className="inline-flex items-center gap-1 text-emerald-400 hover:underline"
-                        href={companyFull.linkedin}
+                        href={externalUrl(companyFull.linkedin)!}
                         target="_blank"
                         rel="noreferrer"
                       >
-                        <Linkedin className="w-4 h-4" />
+                        <Linkedin className="w-4 h-4" /> LinkedIn
                       </a>
                     ) : (
                       ""
@@ -1604,6 +1624,27 @@ export default function CompaniesPage() {
                     label="Company Profile"
                     value={companyFull.company_profile}
                   />
+                </div>
+                <div className="md:col-span-2">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="text-gray-400">Departments</div>
+                    <div className="col-span-2">
+                      {companyFull.departments && companyFull.departments.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {companyFull.departments.map((d, i) => (
+                            <span
+                              key={`${d}-${i}`}
+                              className="inline-flex items-center px-2 py-1 rounded-md bg-gray-800 border border-gray-700 text-xs text-gray-200"
+                            >
+                              {d}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-gray-500">—</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1985,6 +2026,85 @@ function SocialIcon({
   );
 }
 
+// Tag-style editor for a company's departments. Add via Enter or the "+"
+// button, remove via the "×" on each chip. De-dupes case-insensitively so the
+// same department can't be added twice. Used by both the Add and Edit modals.
+function DepartmentsEditor({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  function add() {
+    const v = draft.trim();
+    if (!v) return;
+    if (value.some((d) => d.toLowerCase() === v.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    onChange([...value, v]);
+    setDraft("");
+  }
+
+  function remove(idx: number) {
+    onChange(value.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {value.length === 0 ? (
+          <span className="text-xs text-gray-500">No departments added yet.</span>
+        ) : (
+          value.map((d, i) => (
+            <span
+              key={`${d}-${i}`}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-800 border border-gray-700 text-xs text-gray-200"
+            >
+              {d}
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                className="text-gray-400 hover:text-rose-300"
+                aria-label={`Remove ${d}`}
+              >
+                ×
+              </button>
+            </span>
+          ))
+        )}
+      </div>
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="e.g. LBI, Research…"
+          className="flex-1 min-w-0 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={!draft.trim()}
+          className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-50"
+          title="Add department"
+        >
+          <Plus className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Field({
   label,
   children,
@@ -2096,6 +2216,7 @@ function AddCompanyModal({
     company_profile: string;
     financial_reports: string;
     forecast_value: string;
+    departments: string[];
   };
   setForm: (f: any) => void;
   onClose: () => void;
@@ -2147,6 +2268,7 @@ function AddCompanyModal({
         company_profile: form.company_profile || null,
         financial_reports: form.financial_reports || null,
         forecast_value: form.forecast_value || null,
+        departments: form.departments,
       };
       const res = await fetch("/api/companies", {
         method: "POST",
@@ -2183,6 +2305,7 @@ function AddCompanyModal({
         company_profile: "",
         financial_reports: "",
         forecast_value: "",
+        departments: [],
       });
       await reload();
       onClose();
@@ -2410,6 +2533,18 @@ function AddCompanyModal({
                   onChange={(e) => setForm({ ...form, size: e.target.value })}
                 />
               </label>
+
+              <div className="block md:col-span-2">
+                <span className={labelCls}>Departments</span>
+                <DepartmentsEditor
+                  value={form.departments}
+                  onChange={(next) => setForm({ ...form, departments: next })}
+                />
+                <div className="text-[11px] text-gray-500 mt-1">
+                  Add the company’s departments (e.g. LBI, Research). Press Enter
+                  or “+” to add each one.
+                </div>
+              </div>
             </div>
           )}
 
@@ -2483,12 +2618,9 @@ function AddCompanyModal({
 
               <label className="block">
                 <span className={labelCls}>Main Phone</span>
-                <input
-                  className={fieldCls}
+                <PhoneInput
                   value={form.phone_main}
-                  onChange={(e) =>
-                    setForm({ ...form, phone_main: e.target.value })
-                  }
+                  onChange={(next) => setForm({ ...form, phone_main: next })}
                 />
               </label>
 
