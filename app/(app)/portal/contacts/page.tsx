@@ -2051,37 +2051,28 @@ export default function ContactsPage() {
                 </div>
 
                 <div className="md:col-span-3">
-                  <label className="text-xs text-gray-400 block mb-1">
-                    Contact type
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.contact_type === "lead"}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          contact_type: e.target.checked ? "lead" : "normal",
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500"
+                    />
+                    <span>
+                      <span className="text-sm text-gray-200 block">
+                        Lead contact — include in lead-generation mails
+                      </span>
+                      <span className="text-[11px] text-gray-500 block mt-0.5">
+                        Tick for a lead you want to email in campaigns. Leave it unticked
+                        for a normal CRM contact — stored, but never bulk-mailed.
+                      </span>
+                    </span>
                   </label>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, contact_type: "lead" })}
-                      className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
-                        form.contact_type === "lead"
-                          ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
-                          : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
-                      }`}
-                    >
-                      Lead — include in lead-generation mails
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, contact_type: "normal" })}
-                      className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
-                        form.contact_type === "normal"
-                          ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
-                          : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
-                      }`}
-                    >
-                      Normal contact — CRM only, never mailed
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    Only “Lead” contacts are pulled into lead-generation campaigns. Normal
-                    contacts are stored in your CRM but excluded from bulk email.
-                  </p>
                 </div>
 
                 <div>
@@ -2325,31 +2316,28 @@ export default function ContactsPage() {
                 </select>
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs text-gray-400 block mb-1">Contact type</label>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditForm((f) => ({ ...f, contact_type: "lead" }))}
-                    className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
-                      editForm.contact_type === "lead"
-                        ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
-                        : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
-                    }`}
-                  >
-                    Lead — include in lead-generation mails
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditForm((f) => ({ ...f, contact_type: "normal" }))}
-                    className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
-                      editForm.contact_type === "normal"
-                        ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
-                        : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
-                    }`}
-                  >
-                    Normal contact — CRM only, never mailed
-                  </button>
-                </div>
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editForm.contact_type === "lead"}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        contact_type: e.target.checked ? "lead" : "normal",
+                      }))
+                    }
+                    className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span>
+                    <span className="text-sm text-gray-200 block">
+                      Lead contact — include in lead-generation mails
+                    </span>
+                    <span className="text-[11px] text-gray-500 block mt-0.5">
+                      Untick to make this a normal CRM contact — stored, but never
+                      bulk-mailed.
+                    </span>
+                  </span>
+                </label>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Name</label>
