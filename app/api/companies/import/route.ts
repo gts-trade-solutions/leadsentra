@@ -89,6 +89,8 @@ const HEADER_ALIASES: Record<string, string[]> = {
   size:                ["size", "employees", "employee_count"],
   website:             ["website", "url", "domain"],
   linkedin:            ["linkedin", "linkedin_url"],
+  facebook_url:        ["facebook_url", "facebook"],
+  instagram_url:       ["instagram_url", "instagram"],
   country:             ["country"],
   legal_name:          ["legal_name"],
   trading_name:        ["trading_name"],
@@ -198,11 +200,12 @@ export async function POST(req: Request) {
       try {
         await conn.execute(
           `INSERT INTO companies
-             (company_id, user_id, company_name, industry, segment, size, website, linkedin, country,
+             (company_id, user_id, company_name, industry, segment, size, website, linkedin,
+              facebook_url, instagram_url, country,
               legal_name, trading_name, company_type, head_office_address, city_regency,
               postal_code, phone_main, email_general, notes, company_profile,
               financial_reports, forecast_value)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             company_id,
             session.id,
@@ -212,6 +215,8 @@ export async function POST(req: Request) {
             row.size ?? null,
             row.website ?? null,
             row.linkedin ?? null,
+            row.facebook_url ?? null,
+            row.instagram_url ?? null,
             row.country ?? null,
             row.legal_name ?? null,
             row.trading_name ?? null,

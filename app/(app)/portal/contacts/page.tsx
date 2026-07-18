@@ -1040,7 +1040,7 @@ export default function ContactsPage() {
           <>
             <button
               onClick={() => {
-                const cols = ["company_id", "contact_name", "title", "email", "phone", "linkedin_url"];
+                const cols = ["company_id", "contact_name", "title", "email", "phone", "linkedin_url", "facebook_url", "instagram_url"];
                 const csv = cols.join(",") + "\n";
                 const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
                 const url = URL.createObjectURL(blob);

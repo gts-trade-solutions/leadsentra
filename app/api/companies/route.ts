@@ -67,8 +67,8 @@ export async function POST(req: NextRequest) {
   await db.query(
     `INSERT INTO companies
        (company_id, user_id, company_name, industry, segment, size,
-        website, linkedin, country, city_regency, phone_main, meta)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON))`,
+        website, linkedin, facebook_url, instagram_url, country, city_regency, phone_main, meta)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON))`,
     [
       company_id,
       session.id,
@@ -78,6 +78,8 @@ export async function POST(req: NextRequest) {
       normStr(body.size),
       normStr(body.website),
       normStr(body.linkedin),
+      normStr(body.facebook_url),
+      normStr(body.instagram_url),
       normStr(body.country),
       normStr(body.city_regency),
       normStr(body.phone_main),
@@ -131,6 +133,8 @@ export async function GET(req: NextRequest) {
         c.phone_main,
         c.website,
         c.linkedin,
+        c.facebook_url,
+        c.instagram_url,
         c.meta,
         c.created_at,
         COALESCE(cc.contact_count, 0) AS contact_count
@@ -168,6 +172,8 @@ export async function GET(req: NextRequest) {
       country: row.country ?? "",
       website: row.website ?? "",
       linkedin: row.linkedin ?? "",
+      facebook_url: row.facebook_url ?? "",
+      instagram_url: row.instagram_url ?? "",
       contacts: Number(row.contact_count) || 0,
       created_at: row.created_at,
       owned: row.user_id === session.id,

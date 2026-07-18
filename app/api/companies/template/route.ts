@@ -50,6 +50,8 @@ export async function GET() {
     "phone_main",
     "email_general",
     "linkedin",
+    "facebook_url",
+    "instagram_url",
     "notes",
     "company_profile",
     "financial_reports",

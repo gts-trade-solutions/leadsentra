@@ -107,6 +107,8 @@ type CompanyFull = {
   phone_main?: string | null;
   email_general?: string | null;
   linkedin?: string | null;
+  facebook_url?: string | null;
+  instagram_url?: string | null;
   notes?: string | null;
 
   // NEW fields
@@ -309,6 +311,8 @@ export default function CompaniesPage() {
     phone: "",
     website: "",
     linkedin: "",
+    facebook_url: "",
+    instagram_url: "",
     country: "",
     departments: [] as string[],
   });
@@ -327,6 +331,8 @@ export default function CompaniesPage() {
       phone: (r as any).phone || "",
       website: "",
       linkedin: "",
+      facebook_url: "",
+      instagram_url: "",
       country: r.country || r.location || "",
       departments: [],
     });
@@ -350,6 +356,8 @@ export default function CompaniesPage() {
           phone: c.phone_main || f.phone,
           website: c.website || f.website,
           linkedin: c.linkedin || f.linkedin,
+          facebook_url: c.facebook_url || f.facebook_url,
+          instagram_url: c.instagram_url || f.instagram_url,
           country: c.country || f.country,
           departments: Array.isArray(c.departments) ? c.departments : f.departments,
         }));
@@ -377,6 +385,8 @@ export default function CompaniesPage() {
           phone: editCompanyForm.phone.trim(),
           website: editCompanyForm.website.trim(),
           linkedin: editCompanyForm.linkedin.trim(),
+          facebook_url: editCompanyForm.facebook_url.trim(),
+          instagram_url: editCompanyForm.instagram_url.trim(),
           country: editCompanyForm.country.trim(),
           departments: editCompanyForm.departments,
         }),
@@ -408,6 +418,8 @@ export default function CompaniesPage() {
     phone_main: "",
     email_general: "",
     linkedin: "",
+    facebook_url: "",
+    instagram_url: "",
     notes: "",
     // NEW fields (free text / URL / number)
     company_profile: "",
@@ -1526,6 +1538,22 @@ export default function CompaniesPage() {
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
                 />
               </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Facebook URL</label>
+                <input
+                  value={editCompanyForm.facebook_url}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, facebook_url: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Instagram URL</label>
+                <input
+                  value={editCompanyForm.instagram_url}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, instagram_url: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
               <div className="md:col-span-2">
                 <label className="text-xs text-gray-400 block mb-1">Departments</label>
                 <DepartmentsEditor
@@ -1613,6 +1641,40 @@ export default function CompaniesPage() {
                         rel="noreferrer"
                       >
                         <Linkedin className="w-4 h-4" /> LinkedIn
+                      </a>
+                    ) : (
+                      ""
+                    )
+                  }
+                />
+                <Info
+                  label="Facebook"
+                  value={
+                    externalUrl(companyFull.facebook_url) ? (
+                      <a
+                        className="inline-flex items-center gap-1 text-blue-400 hover:underline"
+                        href={externalUrl(companyFull.facebook_url)!}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Facebook className="w-4 h-4" /> Facebook
+                      </a>
+                    ) : (
+                      ""
+                    )
+                  }
+                />
+                <Info
+                  label="Instagram"
+                  value={
+                    externalUrl(companyFull.instagram_url) ? (
+                      <a
+                        className="inline-flex items-center gap-1 text-pink-400 hover:underline"
+                        href={externalUrl(companyFull.instagram_url)!}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Instagram className="w-4 h-4" /> Instagram
                       </a>
                     ) : (
                       ""
@@ -2212,6 +2274,8 @@ function AddCompanyModal({
     phone_main: string;
     email_general: string;
     linkedin: string;
+    facebook_url: string;
+    instagram_url: string;
     notes: string;
     company_profile: string;
     financial_reports: string;
@@ -2256,6 +2320,8 @@ function AddCompanyModal({
         size: form.size || null,
         website: form.website || null,
         linkedin: form.linkedin || null,
+        facebook_url: form.facebook_url || null,
+        instagram_url: form.instagram_url || null,
         country: form.country || null,
         city_regency: form.city_regency || null,
         phone_main: form.phone_main || null,
@@ -2301,6 +2367,8 @@ function AddCompanyModal({
         phone_main: "",
         email_general: "",
         linkedin: "",
+        facebook_url: "",
+        instagram_url: "",
         notes: "",
         company_profile: "",
         financial_reports: "",
@@ -2569,6 +2637,28 @@ function AddCompanyModal({
                   value={form.linkedin}
                   onChange={(e) =>
                     setForm({ ...form, linkedin: e.target.value })
+                  }
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>Facebook URL</span>
+                <input
+                  className={fieldCls}
+                  placeholder="https://facebook.com/…"
+                  value={form.facebook_url}
+                  onChange={(e) =>
+                    setForm({ ...form, facebook_url: e.target.value })
+                  }
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>Instagram URL</span>
+                <input
+                  className={fieldCls}
+                  placeholder="https://instagram.com/…"
+                  value={form.instagram_url}
+                  onChange={(e) =>
+                    setForm({ ...form, instagram_url: e.target.value })
                   }
                 />
               </label>

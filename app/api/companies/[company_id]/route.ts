@@ -37,6 +37,8 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
     size: "size",
     website: "website",
     linkedin: "linkedin",
+    facebook_url: "facebook_url",
+    instagram_url: "instagram_url",
     country: "country",
     // City/regency lives on its own direct column; the UI calls it "Region".
     region: "city_regency",

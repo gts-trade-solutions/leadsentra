@@ -21,7 +21,7 @@ export async function GET(
   const [companyRows] = await db.execute(
     `SELECT company_id, company_name, legal_name, trading_name, company_type, segment, size, website,
             head_office_address, city_regency, country, postal_code, phone_main, email_general,
-            linkedin, notes, company_profile, financial_reports, forecast_value, meta
+            linkedin, facebook_url, instagram_url, notes, company_profile, financial_reports, forecast_value, meta
        FROM companies
       WHERE company_id = ?
       LIMIT 1`,
