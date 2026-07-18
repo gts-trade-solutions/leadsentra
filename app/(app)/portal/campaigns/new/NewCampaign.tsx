@@ -108,6 +108,9 @@ export default function NewCampaign() {
   const [campaignName, setCampaignName] = useState("");
   const [subject, setSubject] = useState("");
   const [content, setContent] = useState("");
+  // "Reduce promotional signals" — drop tracking pixel/link-redirects + bulk
+  // headers to aim for Gmail's Primary tab (loses open/click analytics).
+  const [lowSignal, setLowSignal] = useState(false);
 
   // Audience picker — server-side paginated.  We never load all contacts
   // into memory; just one page of search results + the total count.
@@ -582,6 +585,7 @@ export default function NewCampaign() {
         from_email: fromEmail,
         from_name: fromName || null,
         status,
+        low_signal: lowSignal,
         audience: buildAudience(),
       };
       if (status === "scheduled") payload.scheduled_at = scheduledAtIso;
@@ -1056,6 +1060,28 @@ export default function NewCampaign() {
                 Use <code className="text-gray-400">{"{{unsubscribe_link}}"}</code> anywhere — it's replaced per recipient.
                 Preview is sandboxed (no JS, no external requests).
               </p>
+
+              {/* Deliverability: aim for Gmail's Primary tab by stripping the
+                  marketing-looking tracking + bulk headers. */}
+              <label className="mt-3 flex items-start gap-3 rounded-lg border border-gray-700 bg-gray-800/60 p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={lowSignal}
+                  onChange={(e) => setLowSignal(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-900 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span>
+                  <span className="text-sm text-gray-200 block">
+                    Reduce promotional signals (aim for Primary inbox)
+                  </span>
+                  <span className="text-[11px] text-gray-500 block mt-0.5">
+                    Removes the open-tracking pixel, click-link redirects, and
+                    “bulk” headers so Gmail is less likely to file this under
+                    Promotions. Trade-off: <b className="text-gray-400">no open/click
+                    stats</b> for this campaign. The unsubscribe link stays.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
         </Card>

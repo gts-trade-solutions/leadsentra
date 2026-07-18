@@ -13,6 +13,11 @@ type SendArgs = {
   /** Campaign id, surfaced in the Feedback-ID header so Gmail Postmaster
    *  Tools can break out reputation per-campaign.  Optional but recommended. */
   campaignId?: string;
+  /** "Reduce promotional signals" mode: drop the Precedence: bulk /
+   *  Auto-Submitted / Sender headers that self-identify the mail as bulk
+   *  marketing (List-Unsubscribe + Feedback-ID are kept). Aims for Gmail's
+   *  Primary tab. Set per-campaign from campaigns.low_signal. */
+  lowSignal?: boolean;
   /** Threading: the original message's Message-ID, set as In-Reply-To on a
    *  reply so it slots into the same conversation in the recipient's client. */
   inReplyTo?: string;
@@ -121,7 +126,7 @@ export async function sendEmail(args: SendArgs): Promise<{ id: string | null }> 
 }
 
 // ---------- AWS SES v2 ----------
-async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, inReplyTo, references, attachments }: SendArgs) {
+async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments }: SendArgs) {
   const { SESv2Client, SendEmailCommand } = await import("@aws-sdk/client-sesv2");
   const ses = new SESv2Client({
     region: process.env.SES_REGION || process.env.AWS_REGION || "us-east-1",
@@ -178,20 +183,26 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
     lines.push("MIME-Version: 1.0");
     lines.push("X-Mailer: LeadSentra (Next.js + SES)");
     if (isBulk) {
-      // Sender header — for downstream relays / Gmail's "via" notice.
-      lines.push(`Sender: ${fromEmail}`);
-      // Bulk-sender compliance (Gmail/Yahoo, Feb 2024+):
+      // Bulk-sender compliance (Gmail/Yahoo, Feb 2024+) — REQUIRED, so kept
+      // even in low-signal mode.
       if (unsubscribeUrl) {
         lines.push(`List-Unsubscribe: <${unsubscribeUrl}>`);
         lines.push("List-Unsubscribe-Post: List-Unsubscribe=One-Click");
       }
-      // Gmail Postmaster Tools: per-campaign reputation tracking.
+      // Gmail Postmaster Tools: per-campaign reputation tracking (invisible to
+      // the tab classifier — kept).
       lines.push(`Feedback-ID: ${feedbackId}`);
-      // Precedence: bulk tells some MTAs not to send auto-replies to this mail.
-      lines.push("Precedence: bulk");
-      // Auto-Submitted: identify as automated bulk; suppresses out-of-office replies.
-      lines.push("Auto-Submitted: auto-generated");
-      if (campaignId) lines.push(`X-Entity-Ref-ID: ${campaignId}`);
+      // The headers below explicitly self-identify the mail as automated bulk,
+      // which nudges Gmail toward the Promotions tab — dropped in low-signal mode.
+      if (!lowSignal) {
+        // Sender header — for downstream relays / Gmail's "via" notice.
+        lines.push(`Sender: ${fromEmail}`);
+        // Precedence: bulk tells some MTAs not to send auto-replies to this mail.
+        lines.push("Precedence: bulk");
+        // Auto-Submitted: identify as automated bulk; suppresses out-of-office replies.
+        lines.push("Auto-Submitted: auto-generated");
+        if (campaignId) lines.push(`X-Entity-Ref-ID: ${campaignId}`);
+      }
     }
     // When there are attachments we wrap the text/html alternative inside a
     // multipart/mixed container and append each attachment as a base64 part.
@@ -319,7 +330,7 @@ function toQuotedPrintable(input: string): string {
 }
 
 // ---------- Resend ----------
-async function sendWithResend({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, inReplyTo, references, attachments }: SendArgs) {
+async function sendWithResend({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments }: SendArgs) {
   const { Resend } = await import("resend");
   const resend = new Resend(process.env.RESEND_API_KEY!);
   const isThreadedReply = !!(inReplyTo || references);
@@ -359,14 +370,18 @@ async function sendWithResend({ to, subject, html, fromEmail, fromName, text, un
       "mkt",
       fromDomain.replace(/\./g, "_"),
     ].join(":");
-    headers["Precedence"] = "bulk";
-    headers["Auto-Submitted"] = "auto-generated";
     headers["Feedback-ID"] = feedbackId;
     if (unsubscribeUrl) {
       headers["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
       headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
     }
-    if (campaignId) headers["X-Entity-Ref-ID"] = campaignId;
+    // Self-identifying bulk headers pushed toward Promotions — dropped in
+    // low-signal mode (List-Unsubscribe + Feedback-ID stay).
+    if (!lowSignal) {
+      headers["Precedence"] = "bulk";
+      headers["Auto-Submitted"] = "auto-generated";
+      if (campaignId) headers["X-Entity-Ref-ID"] = campaignId;
+    }
   }
   payload.headers = headers;
 

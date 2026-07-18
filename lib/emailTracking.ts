@@ -7,7 +7,17 @@ export function unsubscribeUrl(trackingToken: string, baseUrl: string): string {
   return `${baseUrl}/api/unsubscribe?t=${encodeURIComponent(trackingToken)}`;
 }
 
-export function withTracking(html: string, campaignId: string, trackingToken: string, baseUrl: string) {
+export function withTracking(
+  html: string,
+  campaignId: string,
+  trackingToken: string,
+  baseUrl: string,
+  // "Reduce promotional signals" mode: skip the click-tracking link rewrites
+  // and the open pixel (the two clearest "this is marketing" signals) to aim
+  // for Gmail's Primary tab. The unsubscribe link/footer is kept — it pairs
+  // with the required List-Unsubscribe header. Trade-off: no open/click stats.
+  lowSignal = false
+) {
   const unsubUrl = unsubscribeUrl(trackingToken, baseUrl);
 
   // Replace template placeholders with the real unsubscribe URL so users who
@@ -25,14 +35,17 @@ export function withTracking(html: string, campaignId: string, trackingToken: st
   //     recipient on the app home page instead of opening their mail/dialer
   //   - in-page anchors (#...) and unresolved {{template}} placeholders
   // Handles both double- and single-quoted href attributes.
-  body = body.replace(/href=(["'])(.*?)\1/g, (whole, quote, url) => {
-    if (url === unsubUrl) return whole;
-    // Only http:// and https:// links are click-tracked; everything else
-    // (mailto:, tel:, sms:, #anchor, {{placeholder}}, relative paths) passes
-    // through verbatim so it behaves exactly as the author intended.
-    if (!/^https?:\/\//i.test(url)) return whole;
-    return `href=${quote}${baseUrl}/api/track/click?c=${campaignId}&t=${trackingToken}&u=${encodeURIComponent(url)}${quote}`;
-  });
+  // Skipped entirely in low-signal mode (redirect links read as marketing).
+  if (!lowSignal) {
+    body = body.replace(/href=(["'])(.*?)\1/g, (whole, quote, url) => {
+      if (url === unsubUrl) return whole;
+      // Only http:// and https:// links are click-tracked; everything else
+      // (mailto:, tel:, sms:, #anchor, {{placeholder}}, relative paths) passes
+      // through verbatim so it behaves exactly as the author intended.
+      if (!/^https?:\/\//i.test(url)) return whole;
+      return `href=${quote}${baseUrl}/api/track/click?c=${campaignId}&t=${trackingToken}&u=${encodeURIComponent(url)}${quote}`;
+    });
+  }
 
   // If the message didn't include an unsubscribe link of its own, append a
   // discreet footer.  Required for CAN-SPAM, GDPR, and post-2024 Gmail/Yahoo
@@ -46,6 +59,8 @@ export function withTracking(html: string, campaignId: string, trackingToken: st
   }
 
   // 1x1 open-tracking pixel — last so it doesn't appear in the visible footer.
+  // Omitted in low-signal mode (a tracking pixel is a classic Promotions cue).
+  if (lowSignal) return body;
   const pixel = `<img src="${baseUrl}/api/track/open?c=${campaignId}&t=${trackingToken}" width="1" height="1" style="display:none" alt="" />`;
   return body + pixel;
 }

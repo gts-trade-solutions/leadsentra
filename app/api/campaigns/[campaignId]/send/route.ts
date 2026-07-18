@@ -55,7 +55,7 @@ export async function POST(
   const limit = Math.min(Math.max(body.limit ?? 200, 1), 1000);
 
   const [campRows] = await db.execute(
-    "SELECT id, user_id, subject, html, from_email, from_name, status, admin_bypass FROM campaigns WHERE id = ? LIMIT 1",
+    "SELECT id, user_id, subject, html, from_email, from_name, status, admin_bypass, low_signal FROM campaigns WHERE id = ? LIMIT 1",
     [campaignId]
   );
   const campaignRow = (campRows as any[])[0];
@@ -71,6 +71,8 @@ export async function POST(
   }
 
   const isAdminBypass = !!Number(campaignRow.admin_bypass);
+  // "Reduce promotional signals" mode — see withTracking / sendEmail.
+  const lowSignal = !!Number(campaignRow.low_signal);
 
   // Already finished — don't re-charge or re-send.
   if (campaignRow.status === "sent") {
@@ -244,7 +246,7 @@ export async function POST(
       );
     }
 
-    const html = withTracking(baseHtml, campaignId, token, baseUrl);
+    const html = withTracking(baseHtml, campaignId, token, baseUrl, lowSignal);
 
     if (body.dryRun) {
       skipped++;
@@ -261,6 +263,7 @@ export async function POST(
         text: htmlToText(html),
         unsubscribeUrl: unsubscribeUrl(token, baseUrl),
         campaignId,
+        lowSignal,
       });
       // "sent" = accepted by the mail provider for delivery. We do NOT claim
       // "delivered" here — that's only true once the provider's Delivery webhook

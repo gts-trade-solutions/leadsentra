@@ -53,6 +53,9 @@ export async function POST(req: Request) {
   // campaign so the send route can build a "Name" <email> From header.
   const from_name = body.from_name ? String(body.from_name).trim().slice(0, 255) : null;
   const status = String(body.status || "draft");
+  // "Reduce promotional signals" — omit tracking pixel/link-redirects + bulk
+  // headers on send to aim for Gmail's Primary tab (loses open/click stats).
+  const lowSignal = body.low_signal === true;
 
   // Audience resolution.  Admin-bypass mode `admin_all` is only honored for
   // staff (admin/moderator) — it sends to *every* contact regardless of
@@ -268,11 +271,11 @@ export async function POST(req: Request) {
 
     await conn.execute(
       `INSERT INTO campaigns
-         (id, user_id, name, subject, html, from_email, from_name, status, recipients_count, credits_charged, admin_bypass)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+         (id, user_id, name, subject, html, from_email, from_name, status, recipients_count, credits_charged, admin_bypass, low_signal)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       // recipients_count is the SENDABLE count, not the suppressed total —
       // that's what the campaign metrics + credit-cost calculations should see.
-      [id, session.id, name, subject, html, from_email, from_name, status, sendableCount, skipCreditCharge ? 1 : 0]
+      [id, session.id, name, subject, html, from_email, from_name, status, sendableCount, skipCreditCharge ? 1 : 0, lowSignal ? 1 : 0]
     );
 
     if (partitioned.length) {
