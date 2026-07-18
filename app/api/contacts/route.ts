@@ -22,6 +22,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400 });
   }
 
+  // Lead vs normal. Only 'lead' contacts are pulled into lead-generation
+  // campaign audiences (see /api/contacts/unlocked and /api/campaigns). New
+  // contacts default to 'lead' — the Add Contact form sends it explicitly.
+  let contactType = String(body.contact_type || "lead").toLowerCase();
+  if (contactType !== "lead" && contactType !== "normal") contactType = "lead";
+
   const id = randomUUID();
   // department / location / facebook_url / instagram_url / notes live as
   // proper SQL columns in production (added via the 2026-05-11 migration).
@@ -30,13 +36,14 @@ export async function POST(req: Request) {
   // Writing to direct columns keeps both flows consistent.
   await db.execute(
     `INSERT INTO contacts
-       (id, user_id, company_id, contact_name, email, title, phone,
+       (id, user_id, company_id, contact_type, contact_name, email, title, phone,
         linkedin_url, facebook_url, instagram_url, department, location, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       session.id,
       body.company_id || null,
+      contactType,
       body.contact_name || null,
       emailIn,
       body.title || null,
@@ -91,6 +98,7 @@ export async function GET(req: Request) {
   const sql = `SELECT
         c.id,
         c.contact_name AS name,
+        c.contact_type,
         c.title,
         c.email,
         c.phone,

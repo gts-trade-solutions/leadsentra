@@ -23,6 +23,7 @@ const HEADER_ALIASES: Record<string, string[]> = {
   department:    ["department"],
   location:      ["location", "city", "address"],
   notes:         ["notes"],
+  contact_type:  ["contact_type", "type", "kind", "lead_type"],
 };
 
 function buildAliasLookup() {
@@ -147,6 +148,11 @@ export async function POST(req: Request) {
 
       const resolvedCompanyId = resolveCompanyId(row.company_id ?? null);
 
+      // Bulk imports are lead lists, so rows default to 'lead' (mailable).
+      // A CSV can override per-row with a type/kind column set to "normal".
+      const contactType =
+        (row.contact_type ?? "").trim().toLowerCase() === "normal" ? "normal" : "lead";
+
       // Duplicate-email rows skip silently — no error, not counted as
       // failed. Per business request: the same email should only ever
       // exist once in a user's contacts, and the operator doesn't want
@@ -176,13 +182,14 @@ export async function POST(req: Request) {
       try {
         await conn.execute(
           `INSERT INTO contacts
-             (id, user_id, company_id, contact_name, email, title, phone,
+             (id, user_id, company_id, contact_type, contact_name, email, title, phone,
               linkedin_url, facebook_url, instagram_url, department, location, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             session.id,
             resolvedCompanyId,
+            contactType,
             row.contact_name ?? null,
             email,
             row.title ?? null,

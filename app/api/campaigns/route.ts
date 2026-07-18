@@ -118,33 +118,42 @@ export async function POST(req: Request) {
       }
     } else {
       const ph = explicitIds.map(() => "?").join(",");
+      // Only 'lead' contacts are mailable — even an explicitly selected id is
+      // dropped if it's a normal CRM contact (the picker won't offer them, but
+      // this guards stale/hand-built payloads too).
       const sql = callerIsStaff
         ? `SELECT DISTINCT c.id, c.email
              FROM contacts c
             WHERE c.id IN (${ph})
+              AND c.contact_type = 'lead'
               AND c.email IS NOT NULL AND c.email <> ''`
         : `SELECT DISTINCT c.id, c.email
              FROM contacts c
              JOIN unlocked_contacts_v u
                ON u.contact_id = c.id AND u.user_id = ?
             WHERE c.id IN (${ph})
+              AND c.contact_type = 'lead'
               AND c.email IS NOT NULL AND c.email <> ''`;
       const params = callerIsStaff ? explicitIds : [session.id, ...explicitIds];
       const [rows] = await db.query(sql, params);
       recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
     }
   } else if (isAdminBypass) {
-    // Explicit admin compose: send to EVERY contact with a valid email.
+    // Explicit admin compose: send to EVERY LEAD contact with a valid email.
+    // Normal CRM contacts are excluded even in admin-bypass mode.
     const [rows] = await db.query(
       `SELECT id, email FROM contacts
-        WHERE email IS NOT NULL AND email <> ''`
+        WHERE contact_type = 'lead'
+          AND email IS NOT NULL AND email <> ''`
     );
     recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
   } else {
     // 'all' or 'filtered'.  Regular user: scoped to their unlocked_contacts_v.
     // Staff: scoped to ALL contacts (no unlock join).
     // Structured filters (segment/country/company_id) JOIN companies on demand.
-    const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
+    // Only 'lead' contacts are mailable — normal CRM contacts are never
+    // included in a lead-generation campaign audience.
+    const where: string[] = ["c.contact_type = 'lead'", "c.email IS NOT NULL", "c.email <> ''"];
     const params: any[] = [];
     if (!callerIsStaff) {
       where.unshift("u.user_id = ?");

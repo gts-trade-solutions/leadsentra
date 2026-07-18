@@ -49,7 +49,10 @@ export async function GET(req: Request) {
   const needsCompaniesJoin = !!(segment || country);
 
   // ---------- WHERE ----------
-  const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
+  // Only 'lead' contacts are mailable — normal CRM contacts never appear in a
+  // campaign audience. This is the picker feeding the campaign composer, so it
+  // must mirror the same filter applied in /api/campaigns.
+  const where: string[] = ["c.contact_type = 'lead'", "c.email IS NOT NULL", "c.email <> ''"];
   const params: any[] = [];
 
   if (!staffBypass) {

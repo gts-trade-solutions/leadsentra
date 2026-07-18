@@ -53,6 +53,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
   }
 
+  // contact_type is NOT NULL and constrained to a fixed set, so it's handled
+  // separately from the generic map (which would allow NULL). Only 'lead' or
+  // 'normal' are accepted; anything else is ignored.
+  if ("contact_type" in body) {
+    const t = String(body.contact_type || "").toLowerCase();
+    if (t === "lead" || t === "normal") {
+      sets.push("contact_type = ?");
+      vals.push(t);
+    }
+  }
+
   if (!sets.length) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }

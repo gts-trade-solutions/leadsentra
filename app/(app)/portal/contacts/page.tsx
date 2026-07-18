@@ -49,6 +49,8 @@ import {
 type Row = {
   id: string;
   name: string;
+  // 'lead' = mailable in lead-generation campaigns; 'normal' = CRM-only.
+  contact_type?: string | null;
   title: string;
   company: string;
   email: string | null;
@@ -278,6 +280,7 @@ export default function ContactsPage() {
     renderFilterHeader("Company", "company"),
     renderFilterHeader("Phone", "phone"),
     renderFilterHeader("LinkedIn URL", "linkedin_url"),
+    "Type",
     "Actions",
   ];
 
@@ -298,6 +301,7 @@ export default function ContactsPage() {
     phone: "",
     linkedin_url: "",
     company_id: "",
+    contact_type: "lead",
   });
 
   async function openEdit(r: Row) {
@@ -310,6 +314,7 @@ export default function ContactsPage() {
       phone: r.phone || "",
       linkedin_url: r.linkedin_url || "",
       company_id: "", // resolved when companies list loads
+      contact_type: r.contact_type === "normal" ? "normal" : "lead",
     });
     // Lazy-load the companies dropdown the first time the user edits a row.
     if (companies.length === 0) {
@@ -341,6 +346,7 @@ export default function ContactsPage() {
         email: editForm.email.trim(),
         phone: editForm.phone.trim(),
         linkedin_url: editForm.linkedin_url.trim(),
+        contact_type: editForm.contact_type,
       };
       if (editForm.company_id) payload.company_id = editForm.company_id;
       const res = await fetch(`/api/contacts/${editingId}`, {
@@ -371,6 +377,7 @@ export default function ContactsPage() {
   const [newCompanyErr, setNewCompanyErr] = useState<string | null>(null);
   const [form, setForm] = useState({
     company_id: "",
+    contact_type: "lead",
     contact_name: "",
     title: "",
     department: "",
@@ -1564,6 +1571,22 @@ export default function ContactsPage() {
               ) : (
                 <span className="text-gray-400">••••••••••</span>
               ),
+              type: (
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${
+                    r.contact_type === "lead"
+                      ? "border-emerald-600 bg-emerald-900/30 text-emerald-300"
+                      : "border-gray-600 bg-gray-800 text-gray-400"
+                  }`}
+                  title={
+                    r.contact_type === "lead"
+                      ? "Included in lead-generation campaigns"
+                      : "CRM only — excluded from bulk email"
+                  }
+                >
+                  {r.contact_type === "lead" ? "Lead" : "Normal"}
+                </span>
+              ),
               Actions: r.is_unlocked ? (
                 <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
                   <div className="flex gap-2">
@@ -2027,6 +2050,40 @@ export default function ContactsPage() {
                   )}
                 </div>
 
+                <div className="md:col-span-3">
+                  <label className="text-xs text-gray-400 block mb-1">
+                    Contact type
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, contact_type: "lead" })}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
+                        form.contact_type === "lead"
+                          ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
+                          : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
+                      }`}
+                    >
+                      Lead — include in lead-generation mails
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, contact_type: "normal" })}
+                      className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
+                        form.contact_type === "normal"
+                          ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
+                          : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
+                      }`}
+                    >
+                      Normal contact — CRM only, never mailed
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Only “Lead” contacts are pulled into lead-generation campaigns. Normal
+                    contacts are stored in your CRM but excluded from bulk email.
+                  </p>
+                </div>
+
                 <div>
                   <label className="text-xs text-gray-400 block mb-1">
                     Name
@@ -2160,6 +2217,7 @@ export default function ContactsPage() {
                   setAddErr(null);
                   setForm({
                     company_id: "",
+                    contact_type: "lead",
                     contact_name: "",
                     title: "",
                     department: "",
@@ -2185,6 +2243,7 @@ export default function ContactsPage() {
                       throw new Error("Company and Name are required");
                     const payload: any = {
                       company_id: form.company_id,
+                      contact_type: form.contact_type,
                       contact_name: form.contact_name,
                       title: form.title || null,
                       department: form.department || null,
@@ -2211,6 +2270,7 @@ export default function ContactsPage() {
                     setShowAdd(false);
                     setForm({
                       company_id: "",
+                      contact_type: "lead",
                       contact_name: "",
                       title: "",
                       department: "",
@@ -2263,6 +2323,33 @@ export default function ContactsPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Contact type</label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditForm((f) => ({ ...f, contact_type: "lead" }))}
+                    className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
+                      editForm.contact_type === "lead"
+                        ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
+                        : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
+                    }`}
+                  >
+                    Lead — include in lead-generation mails
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditForm((f) => ({ ...f, contact_type: "normal" }))}
+                    className={`flex-1 px-3 py-2 rounded-lg border text-sm text-left ${
+                      editForm.contact_type === "normal"
+                        ? "border-emerald-500 bg-emerald-600/20 text-emerald-200"
+                        : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
+                    }`}
+                  >
+                    Normal contact — CRM only, never mailed
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Name</label>
