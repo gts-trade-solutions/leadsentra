@@ -62,6 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   setIf("subject", "subject");
   setIf("body", "body");
+  setIf("button_label", "button_label");
   setIf("company_id", "company_id");
   setIf("department", "department");
 

@@ -31,6 +31,7 @@ type CatItem = {
   title: string;
   subject: string | null;
   body: string | null;
+  button_label: string | null;
   company_id: string | null;
   department: string | null;
   file_name: string | null;
@@ -491,6 +492,7 @@ function CatalogueModal({
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [buttonLabel, setButtonLabel] = useState("");
   const [companyId, setCompanyId] = useState(defaultCompanyId);
   const [department, setDepartment] = useState(defaultDepartment);
   const [departments, setDepartments] = useState<string[]>([]);
@@ -540,6 +542,7 @@ function CatalogueModal({
           setTitle(found.title || "");
           setSubject(found.subject || "");
           setBody(found.body || "");
+          setButtonLabel(found.button_label || "");
           setCompanyId(found.company_id || "");
           setDepartment(found.department || "");
           if (found.file_path) setExistingFile({ name: found.file_name || "file", path: found.file_path });
@@ -562,6 +565,7 @@ function CatalogueModal({
       fd.set("title", title.trim());
       fd.set("subject", subject.trim());
       fd.set("body", body);
+      fd.set("button_label", buttonLabel.trim());
       fd.set("company_id", companyId);
       fd.set("department", department);
       const file = fileRef.current?.files?.[0];
@@ -692,11 +696,26 @@ function CatalogueModal({
           </div>
 
           <div>
+            <label className={labelCls}>Download button text</label>
+            <input
+              value={buttonLabel}
+              onChange={(e) => setButtonLabel(e.target.value)}
+              placeholder={kind === "offer" ? "View offer" : "Download catalogue"}
+              className={fieldCls}
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Shown on the green download button. Leave blank to use the default (
+              {kind === "offer" ? "“View offer: <file name>”" : "“Download catalogue: <file name>”"}
+              ).
+            </p>
+          </div>
+
+          <div>
             <label className={labelCls}>Attachment (PDF, image, etc. — max 25 MB)</label>
             {existingFile && !removeFile && (
               <div className="mb-2 flex items-center gap-2 text-xs text-gray-300">
                 <Paperclip className="w-3.5 h-3.5" />
-                <a href={existingFile.path} target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline break-all">
+                <a href={catalogueFileUrl(existingFile.path)} target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline break-all">
                   {existingFile.name}
                 </a>
                 <button
@@ -780,14 +799,16 @@ function buildEmailHtml(item: CatItem): string {
     : escapeHtml(rawBody).replace(/\r?\n/g, "<br>");
 
   if (item.file_path) {
-    const label = item.kind === "offer" ? "View offer" : "Download catalogue";
+    // Custom button text when the user set one, else the default
+    // "Download catalogue: <filename>" / "View offer: <filename>".
+    const defaultText =
+      `${item.kind === "offer" ? "View offer" : "Download catalogue"}: ${item.file_name || item.title}`;
+    const buttonText = (item.button_label || "").trim() || defaultText;
     html +=
       `\n<p style="margin-top:24px">` +
       `<a href="${catalogueFileUrl(item.file_path)}" ` +
       `style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;` +
-      `padding:12px 20px;border-radius:8px;font-weight:600">${label}: ${escapeHtml(
-        item.file_name || item.title
-      )}</a></p>`;
+      `padding:12px 20px;border-radius:8px;font-weight:600">${escapeHtml(buttonText)}</a></p>`;
   }
   return html;
 }

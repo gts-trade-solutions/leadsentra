@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const [rows] = await db.query(
-    `SELECT id, kind, title, subject, body, company_id, department,
+    `SELECT id, kind, title, subject, body, button_label, company_id, department,
             file_name, file_path, file_type, file_size, created_at
        FROM company_catalogues
        ${whereSql}
@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
 
   const subject = norm(fd.get("subject"));
   const body = norm(fd.get("body"));
+  const buttonLabel = norm(fd.get("button_label"));
   const companyId = norm(fd.get("company_id"));
   const department = norm(fd.get("department"));
 
@@ -121,9 +122,9 @@ export async function POST(req: NextRequest) {
   const id = randomUUID();
   await db.execute(
     `INSERT INTO company_catalogues
-       (id, user_id, kind, title, subject, body, company_id, department,
+       (id, user_id, kind, title, subject, body, button_label, company_id, department,
         file_name, file_path, file_type, file_size)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       session.id,
@@ -131,6 +132,7 @@ export async function POST(req: NextRequest) {
       title,
       subject,
       body,
+      buttonLabel,
       companyId,
       department,
       fileMeta.file_name,
