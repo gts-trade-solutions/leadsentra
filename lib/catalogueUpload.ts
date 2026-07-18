@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, readFile } from "fs/promises";
 import path from "path";
 
 // Where uploaded catalogue/offer files land. Served statically by Next from
@@ -39,4 +39,21 @@ export async function saveCatalogueUpload(
     file_type: file.type ? String(file.type).slice(0, 128) : null,
     file_size: file.size,
   };
+}
+
+/**
+ * Read a stored catalogue file off disk by its bare disk name (the last
+ * segment of file_path). We serve these through an API route rather than
+ * relying on Next static serving of public/ — under `output: 'standalone'`
+ * runtime-written files in public/ aren't served, which 404s the download
+ * links in sent catalogue emails. Rejects any name with a path separator so a
+ * caller can't traverse out of the upload dir.
+ */
+export async function readCatalogueFile(diskName: string): Promise<Buffer | null> {
+  if (!diskName || /[\\/]/.test(diskName) || diskName.includes("..")) return null;
+  try {
+    return await readFile(path.join(UPLOAD_DIR, diskName));
+  } catch {
+    return null;
+  }
 }

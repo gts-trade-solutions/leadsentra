@@ -13,6 +13,7 @@ import {
   Tag,
   Building2,
   FileText,
+  Eye,
   X,
 } from "lucide-react";
 import SectionHeader from "@/components/SectionHeader";
@@ -58,6 +59,8 @@ export default function CataloguesPage() {
   // Modal (create / edit)
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  // Email preview modal (shows exactly what a catalogue/offer will send).
+  const [previewItem, setPreviewItem] = useState<CatItem | null>(null);
 
   const companyName = useMemo(
     () => companies.find((c) => c.company_id === companyId)?.name || "",
@@ -151,21 +154,8 @@ export default function CataloguesPage() {
 
   // ---- send: hand off to the campaign composer, prefilled ----
   function send(item: CatItem) {
-    // Build the email HTML: the saved body, plus a "Download" button when a
-    // file is attached. Big attachments hurt deliverability, so we link to the
-    // file (served publicly) instead of attaching raw bytes.
-    let html = item.body || "";
-    if (item.file_path) {
-      const absolute = `${window.location.origin}${item.file_path}`;
-      const label = item.kind === "offer" ? "View offer" : "Download catalogue";
-      html +=
-        `\n<p style="margin-top:24px">` +
-        `<a href="${absolute}" ` +
-        `style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;` +
-        `padding:12px 20px;border-radius:8px;font-weight:600">${label}: ${escapeHtml(
-          item.file_name || item.title
-        )}</a></p>`;
-    }
+    // Build the email HTML (shared with the Preview modal).
+    const html = buildEmailHtml(item);
 
     const handoff = {
       source: "catalogue",
@@ -306,6 +296,7 @@ export default function CataloguesPage() {
               }}
               onDelete={() => remove(item.id)}
               onSend={() => send(item)}
+              onPreview={() => setPreviewItem(item)}
             />
           ))}
         </div>
@@ -324,6 +315,57 @@ export default function CataloguesPage() {
           }}
         />
       )}
+
+      {previewItem && (
+        <PreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Preview modal ---------------- */
+
+// Shows the exact email a catalogue/offer will send: the subject line plus the
+// composed HTML body (rendered in a sandboxed iframe so the email's own markup
+// can't touch the app). Uses the same buildEmailHtml() as the Send hand-off.
+function PreviewModal({ item, onClose }: { item: CatItem; onClose: () => void }) {
+  const html = buildEmailHtml(item);
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"/>` +
+    `<meta name="viewport" content="width=device-width, initial-scale=1"/>` +
+    `<style>body{font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;` +
+    `margin:0;padding:20px;line-height:1.5;word-wrap:break-word}a{color:#059669}</style></head>` +
+    `<body>${html}</body></html>`;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
+      <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 flex flex-col max-h-[85vh]">
+        <div className="px-5 pt-5 pb-3 border-b border-gray-800 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-white">Email preview</h3>
+            <p className="text-xs text-gray-400 mt-0.5 truncate">
+              Subject: <span className="text-gray-200">{item.subject || item.title}</span>
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg border border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
+            aria-label="Close preview"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="p-4 overflow-auto">
+          <iframe
+            title="Email preview"
+            sandbox=""
+            srcDoc={srcDoc}
+            className="w-full h-[55vh] rounded-lg border border-gray-800 bg-white"
+          />
+        </div>
+        <div className="px-5 py-3 border-t border-gray-800 text-[11px] text-gray-500">
+          This is how the message body renders. Recipients also see your sender name,
+          the tracking/unsubscribe footer, and any personalization applied at send time.
+        </div>
+      </div>
     </div>
   );
 }
@@ -336,12 +378,14 @@ function CatalogueCard({
   onEdit,
   onDelete,
   onSend,
+  onPreview,
 }: {
   item: CatItem;
   companyName?: string;
   onEdit: () => void;
   onDelete: () => void;
   onSend: () => void;
+  onPreview: () => void;
 }) {
   const isOffer = item.kind === "offer";
   return (
@@ -382,7 +426,7 @@ function CatalogueCard({
 
       {item.file_path && (
         <a
-          href={item.file_path}
+          href={catalogueFileUrl(item.file_path)}
           target="_blank"
           rel="noreferrer"
           className="mt-3 inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:underline break-all"
@@ -398,6 +442,12 @@ function CatalogueCard({
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium"
         >
           <Send className="w-3.5 h-3.5" /> Send
+        </button>
+        <button
+          onClick={onPreview}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs"
+        >
+          <Eye className="w-3.5 h-3.5" /> Preview
         </button>
         <button
           onClick={onEdit}
@@ -701,4 +751,43 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// Public URL for a stored catalogue file. We serve it through an API route
+// (/api/catalogues/file/<name>) instead of the raw /uploads/... path, which
+// 404s under `output: 'standalone'`. Prefer the configured public app URL so
+// the link is reachable for recipients; fall back to the current origin.
+function catalogueFileUrl(filePath: string): string {
+  const name = (filePath || "").split("/").pop() || "";
+  const base =
+    (process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/$/, "") ||
+    (typeof window !== "undefined" ? window.location.origin : "");
+  return `${base}/api/catalogues/file/${encodeURIComponent(name)}`;
+}
+
+// Build the email HTML sent for a catalogue/offer: the saved message body plus
+// a "Download / View" button linking to the attached file. Shared by the Send
+// hand-off and the Preview modal so what you preview is exactly what sends.
+//
+// If the body isn't already HTML (the "HTML allowed" box was filled with plain
+// text), we escape it and turn line breaks into <br> — otherwise newlines
+// collapse and the whole message renders as one run-on paragraph.
+function buildEmailHtml(item: CatItem): string {
+  const rawBody = item.body || "";
+  const looksHtml = /<[a-z][\s\S]*>/i.test(rawBody);
+  let html = looksHtml
+    ? rawBody
+    : escapeHtml(rawBody).replace(/\r?\n/g, "<br>");
+
+  if (item.file_path) {
+    const label = item.kind === "offer" ? "View offer" : "Download catalogue";
+    html +=
+      `\n<p style="margin-top:24px">` +
+      `<a href="${catalogueFileUrl(item.file_path)}" ` +
+      `style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;` +
+      `padding:12px 20px;border-radius:8px;font-weight:600">${label}: ${escapeHtml(
+        item.file_name || item.title
+      )}</a></p>`;
+  }
+  return html;
 }
