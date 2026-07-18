@@ -44,15 +44,16 @@ export async function GET(req: Request) {
   const limit      = Math.min(Math.max(Number(url.searchParams.get("limit") || 50), 1), 500);
   const offset     = Math.max(Number(url.searchParams.get("offset") || 0), 0);
   const countOnly  = url.searchParams.get("count") === "only";
+  // Set by the Catalogues & Offers send flow only: restrict to 'lead' contacts.
+  // Regular audience listings leave it off and show all contacts, as before.
+  const leadsOnly  = url.searchParams.get("leads_only") === "1";
 
   const staffBypass = isStaff(session.role);
   const needsCompaniesJoin = !!(segment || country);
 
   // ---------- WHERE ----------
-  // Only 'lead' contacts are mailable — normal CRM contacts never appear in a
-  // campaign audience. This is the picker feeding the campaign composer, so it
-  // must mirror the same filter applied in /api/campaigns.
-  const where: string[] = ["c.contact_type = 'lead'", "c.email IS NOT NULL", "c.email <> ''"];
+  const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
+  if (leadsOnly) where.push("c.contact_type = 'lead'");
   const params: any[] = [];
 
   if (!staffBypass) {

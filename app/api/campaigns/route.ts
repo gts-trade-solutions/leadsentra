@@ -78,6 +78,11 @@ export async function POST(req: Request) {
   // Department targeting (e.g. "LBI") — narrows to contacts whose `department`
   // column matches. Used by the Catalogues & Offers send flow.
   const filterDepartment = String(audience.department || "").trim();
+  // Leads-only audience — set ONLY by the Catalogues & Offers send flow, which
+  // targets 'lead' contacts. Regular campaigns leave it off and reach every
+  // contact, exactly as before this feature.
+  const leadsOnly = audience.leads_only === true;
+  const leadClause = leadsOnly ? "AND c.contact_type = 'lead'" : "";
   // company_ids (array, new) takes priority; company_id (single, legacy) is
   // still honored for any caller that hasn't migrated yet.
   const filterCompanyIds: string[] = Array.isArray(audience.company_ids)
@@ -118,42 +123,40 @@ export async function POST(req: Request) {
       }
     } else {
       const ph = explicitIds.map(() => "?").join(",");
-      // Only 'lead' contacts are mailable — even an explicitly selected id is
-      // dropped if it's a normal CRM contact (the picker won't offer them, but
-      // this guards stale/hand-built payloads too).
+      // leadClause is empty for regular sends and 'AND c.contact_type = \'lead\''
+      // for catalogue/offer sends.
       const sql = callerIsStaff
         ? `SELECT DISTINCT c.id, c.email
              FROM contacts c
             WHERE c.id IN (${ph})
-              AND c.contact_type = 'lead'
+              ${leadClause}
               AND c.email IS NOT NULL AND c.email <> ''`
         : `SELECT DISTINCT c.id, c.email
              FROM contacts c
              JOIN unlocked_contacts_v u
                ON u.contact_id = c.id AND u.user_id = ?
             WHERE c.id IN (${ph})
-              AND c.contact_type = 'lead'
+              ${leadClause}
               AND c.email IS NOT NULL AND c.email <> ''`;
       const params = callerIsStaff ? explicitIds : [session.id, ...explicitIds];
       const [rows] = await db.query(sql, params);
       recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
     }
   } else if (isAdminBypass) {
-    // Explicit admin compose: send to EVERY LEAD contact with a valid email.
-    // Normal CRM contacts are excluded even in admin-bypass mode.
+    // Explicit admin compose: send to EVERY contact with a valid email
+    // (restricted to leads only when the send is a catalogue/offer).
     const [rows] = await db.query(
       `SELECT id, email FROM contacts
-        WHERE contact_type = 'lead'
-          AND email IS NOT NULL AND email <> ''`
+        WHERE email IS NOT NULL AND email <> ''
+          ${leadsOnly ? "AND contact_type = 'lead'" : ""}`
     );
     recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
   } else {
     // 'all' or 'filtered'.  Regular user: scoped to their unlocked_contacts_v.
     // Staff: scoped to ALL contacts (no unlock join).
     // Structured filters (segment/country/company_id) JOIN companies on demand.
-    // Only 'lead' contacts are mailable — normal CRM contacts are never
-    // included in a lead-generation campaign audience.
-    const where: string[] = ["c.contact_type = 'lead'", "c.email IS NOT NULL", "c.email <> ''"];
+    const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
+    if (leadsOnly) where.push("c.contact_type = 'lead'");
     const params: any[] = [];
     if (!callerIsStaff) {
       where.unshift("u.user_id = ?");

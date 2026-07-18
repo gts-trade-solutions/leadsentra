@@ -35,6 +35,9 @@ export async function POST(req: Request) {
   const filterSegment    = String(audience?.segment    || "").trim();
   const filterCountry    = String(audience?.country    || "").trim();
   const filterDepartment = String(audience?.department || "").trim();
+  // Catalogue/offer sends restrict to 'lead' contacts; regular sends don't.
+  const leadsOnly = audience?.leads_only === true;
+  const leadClause = leadsOnly ? "AND c.contact_type = 'lead'" : "";
   // company_ids (array, new) takes priority; company_id (single, legacy) is
   // still honored for backwards compatibility with existing callers.
   const filterCompanyIds: string[] = Array.isArray(audience?.company_ids)
@@ -55,21 +58,23 @@ export async function POST(req: Request) {
     const ph = explicitIds.map(() => "?").join(",");
     const sql = callerIsStaff
       ? `SELECT DISTINCT c.email FROM contacts c
-          WHERE c.id IN (${ph}) AND c.email IS NOT NULL AND c.email <> ''`
+          WHERE c.id IN (${ph}) ${leadClause} AND c.email IS NOT NULL AND c.email <> ''`
       : `SELECT DISTINCT c.email
            FROM contacts c
            JOIN unlocked_contacts_v u ON u.contact_id = c.id AND u.user_id = ?
-          WHERE c.id IN (${ph}) AND c.email IS NOT NULL AND c.email <> ''`;
+          WHERE c.id IN (${ph}) ${leadClause} AND c.email IS NOT NULL AND c.email <> ''`;
     const params = callerIsStaff ? explicitIds : [session.id, ...explicitIds];
     const [rows] = await db.query(sql, params);
     recipients = (rows as any[]).map((r) => ({ email: r.email }));
   } else if (mode === "admin_all") {
     const [rows] = await db.query(
-      `SELECT email FROM contacts WHERE email IS NOT NULL AND email <> ''`
+      `SELECT email FROM contacts WHERE email IS NOT NULL AND email <> ''
+        ${leadsOnly ? "AND contact_type = 'lead'" : ""}`
     );
     recipients = (rows as any[]).map((r) => ({ email: r.email }));
   } else {
     const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
+    if (leadsOnly) where.push("c.contact_type = 'lead'");
     const params: any[] = [];
     if (!callerIsStaff) { where.unshift("u.user_id = ?"); params.push(session.id); }
     if (mode === "filtered" && search) {

@@ -172,6 +172,9 @@ export default function NewCampaign() {
   const [filterDepartment, setFilterDepartment] = useState("");
   // Friendly label for the catalogue prefill banner (company › department).
   const [catalogueTarget, setCatalogueTarget] = useState<string | null>(null);
+  // Catalogue/Offer sends target 'lead' contacts only. Regular campaigns leave
+  // this false and reach all contacts, exactly as before.
+  const [leadsOnly, setLeadsOnly] = useState(false);
   const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
   const [companySearch, setCompanySearch] = useState("");
   const companyMenuRef = useRef<HTMLDivElement | null>(null);
@@ -291,6 +294,8 @@ export default function NewCampaign() {
       if (h?.title) setCampaignName(String(h.title));
       if (h?.subject) setSubject(String(h.subject));
       if (h?.html) setContent(String(h.html));
+      // This is a Catalogues & Offers send — restrict the audience to leads.
+      setLeadsOnly(true);
       const companyId = String(h?.company_id || "");
       const department = String(h?.department || "");
       if (companyId) {
@@ -371,6 +376,7 @@ export default function NewCampaign() {
       if (filterSegment)    u.searchParams.set("segment", filterSegment);
       if (filterCountry)    u.searchParams.set("country", filterCountry);
       if (filterDepartment) u.searchParams.set("department", filterDepartment);
+      if (leadsOnly)        u.searchParams.set("leads_only", "1");
       // Multi-select: append company_id once per selected id.
       filterCompanyIds.forEach((id) => u.searchParams.append("company_id", id));
       const res = await fetch(u.toString(), { credentials: "same-origin", cache: "no-store" });
@@ -408,6 +414,7 @@ export default function NewCampaign() {
         if (filterSegment)    url.searchParams.set("segment", filterSegment);
         if (filterCountry)    url.searchParams.set("country", filterCountry);
         if (filterDepartment) url.searchParams.set("department", filterDepartment);
+        if (leadsOnly)        url.searchParams.set("leads_only", "1");
         filterCompanyIds.forEach((id) => url.searchParams.append("company_id", id));
         const res = await fetch(url.toString(), { credentials: "same-origin", cache: "no-store" });
         const data = await res.json().catch(() => ({}));
@@ -423,7 +430,7 @@ export default function NewCampaign() {
         setRecLoading(false);
       }
     },
-    [filterSegment, filterCountry, filterCompanyIds, filterDepartment]
+    [filterSegment, filterCountry, filterCompanyIds, filterDepartment, leadsOnly]
   );
 
   // Reload when search, mode, or any structured filter changes.
@@ -529,10 +536,14 @@ export default function NewCampaign() {
     segment?: string;
     country?: string;
     company_id?: string;
+    leads_only?: boolean;
   } {
+    // Catalogue/Offer sends restrict the audience to 'lead' contacts; regular
+    // campaigns omit the flag and reach all contacts.
+    const leadFlag = leadsOnly ? { leads_only: true } : {};
     if (adminMode) {
       // Server checks staff role and downgrades to 'all' for non-staff.
-      return { mode: "admin_all" };
+      return { mode: "admin_all", ...leadFlag };
     }
     // Structured filters apply to both 'all' and 'filtered' modes.
     // company_ids is an array so the audience picker can target multiple
@@ -544,12 +555,12 @@ export default function NewCampaign() {
     if (filterDepartment)           filters.department  = filterDepartment;
 
     if (mode === "selected") {
-      return { mode: "selected", contact_ids: Array.from(selectedIds) };
+      return { mode: "selected", contact_ids: Array.from(selectedIds), ...leadFlag };
     }
     if (mode === "filtered") {
-      return { mode: "filtered", q: recSearch.trim().toLowerCase() || undefined, ...filters };
+      return { mode: "filtered", q: recSearch.trim().toLowerCase() || undefined, ...filters, ...leadFlag };
     }
-    return { mode: "all", ...filters };
+    return { mode: "all", ...filters, ...leadFlag };
   }
 
   function loadMore() {
@@ -1059,6 +1070,7 @@ export default function NewCampaign() {
               <div className="text-sm text-emerald-100">
                 Prefilled from catalogue — targeting{" "}
                 <b className="text-white">{catalogueTarget}</b>
+                <span className="text-emerald-300/80"> · lead contacts only</span>
               </div>
               {filterDepartment && (
                 <button
