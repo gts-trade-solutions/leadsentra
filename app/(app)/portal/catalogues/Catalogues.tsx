@@ -682,16 +682,15 @@ function CatalogueModal({
           </div>
 
           <div>
-            <label className={labelCls}>Email message (HTML allowed)</label>
-            <textarea
-              rows={7}
+            <label className={labelCls}>Email message</label>
+            <RichTextEditor
               value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={"<p>Hi {{name}},</p>\n<p>Please find our latest catalogue below.</p>"}
-              className={`${fieldCls} font-mono text-sm`}
+              onChange={setBody}
+              placeholder="Write your message… select text and use Bold / Italic. You can also paste formatted text from Word or Google Docs."
             />
             <p className="text-[11px] text-gray-500 mt-1">
-              When you send, the attached file appears as a download button at the bottom of the email.
+              Formatting (bold, italic, lists, links) is kept in the sent email. When you send,
+              the attached file appears as a download button at the bottom.
             </p>
           </div>
 
@@ -770,6 +769,71 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/* ---------------- Rich text editor ---------------- */
+
+// Minimal WYSIWYG for the email body: real Bold / Italic / Underline / List /
+// Link that produce HTML, so formatting — including bold pasted from Word or
+// Google Docs — is preserved in the sent email (a plain textarea silently
+// dropped it). Uses execCommand: deprecated but universally supported, and
+// fine for an internal composer.
+function RichTextEditor({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (html: string) => void;
+  placeholder?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Sync an external value in (edit prefill / async load) WITHOUT stealing the
+  // caret while the user is actively typing in the editor.
+  useEffect(() => {
+    const el = ref.current;
+    if (el && document.activeElement !== el && el.innerHTML !== (value || "")) {
+      el.innerHTML = value || "";
+    }
+  }, [value]);
+
+  const exec = (cmd: string, arg?: string) => {
+    document.execCommand(cmd, false, arg);
+    if (ref.current) onChange(ref.current.innerHTML);
+  };
+  const addLink = () => {
+    const url = window.prompt("Link URL (https://…)");
+    if (url) exec("createLink", url.trim());
+  };
+  // Shared props: preventDefault on mousedown keeps the text selection when a
+  // toolbar button is clicked (otherwise the selection is lost first).
+  const tbBtn = "px-2 py-1 rounded text-sm text-gray-200 hover:bg-gray-700";
+  const noBlur = (e: { preventDefault: () => void }) => e.preventDefault();
+
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-800">
+      <style>{`.rte-body:empty:before{content:attr(data-ph);color:#6b7280;pointer-events:none;}`}</style>
+      <div className="flex flex-wrap items-center gap-0.5 border-b border-gray-700 px-1 py-1">
+        <button type="button" title="Bold" onMouseDown={noBlur} onClick={() => exec("bold")} className={`${tbBtn} font-bold`}>B</button>
+        <button type="button" title="Italic" onMouseDown={noBlur} onClick={() => exec("italic")} className={`${tbBtn} italic`}>I</button>
+        <button type="button" title="Underline" onMouseDown={noBlur} onClick={() => exec("underline")} className={`${tbBtn} underline`}>U</button>
+        <span className="w-px h-4 bg-gray-700 mx-1" />
+        <button type="button" title="Bulleted list" onMouseDown={noBlur} onClick={() => exec("insertUnorderedList")} className={tbBtn}>• List</button>
+        <button type="button" title="Add link" onMouseDown={noBlur} onClick={addLink} className={tbBtn}>Link</button>
+        <button type="button" title="Clear formatting" onMouseDown={noBlur} onClick={() => exec("removeFormat")} className={`${tbBtn} text-xs text-gray-400 ml-auto`}>Clear</button>
+      </div>
+      <div
+        ref={ref}
+        contentEditable
+        role="textbox"
+        aria-multiline="true"
+        data-ph={placeholder || ""}
+        onInput={(e) => onChange((e.currentTarget as HTMLDivElement).innerHTML)}
+        className="rte-body min-h-[160px] max-h-[320px] overflow-auto px-3 py-2 text-sm text-gray-200 leading-relaxed focus:outline-none"
+      />
+    </div>
+  );
 }
 
 // Public URL for a stored catalogue file. We serve it through an API route
