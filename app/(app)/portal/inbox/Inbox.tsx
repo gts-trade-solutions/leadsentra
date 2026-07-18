@@ -1,7 +1,7 @@
 "use client";
 export const dynamic = "force-dynamic";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Mail,
   MailMinus,
@@ -11,6 +11,7 @@ import {
   Reply,
   Paperclip,
   Plug,
+  Plus,
   ArrowLeft,
   Send,
 } from "lucide-react";
@@ -18,11 +19,14 @@ import SectionHeader from "@/components/SectionHeader";
 import { toast } from "@/hooks/use-toast";
 
 type Account = {
+  id: string;
   imap_host: string;
   imap_port: number;
   imap_secure: boolean;
   username: string;
   from_name: string | null;
+  label: string | null;
+  is_default: boolean;
 };
 
 type MsgListItem = {
@@ -58,9 +62,17 @@ type ResponseItem = {
 };
 
 export default function InboxPage() {
-  const [connected, setConnected] = useState<boolean | null>(null); // null = loading
-  const [account, setAccount] = useState<Account | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  // Multiple connected mailboxes; `activeAccountId` is the one being viewed.
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [showSettings, setShowSettings] = useState(false); // edit the active account
+  const [showAdd, setShowAdd] = useState(false);           // connect a new account
+  // Latest active-account id, readable inside the stable useCallback fetchers.
+  const activeIdRef = useRef<string | null>(null);
+
+  const activeAccount = accounts.find((a) => a.id === activeAccountId) || null;
+  const connected = accounts.length > 0;
 
   const [folders, setFolders] = useState<{ path: string; name: string; specialUse: string | null }[]>([]);
   const [mailbox, setMailbox] = useState("INBOX");
@@ -102,7 +114,10 @@ export default function InboxPage() {
     setMsgLoading(true);
     setSelected(null);
     try {
-      const res = await fetch(`/api/mail/messages/${uid}?mailbox=INBOX`, { cache: "no-store", credentials: "same-origin" });
+      const u = new URL(`/api/mail/messages/${uid}`, window.location.origin);
+      u.searchParams.set("mailbox", "INBOX");
+      if (activeIdRef.current) u.searchParams.set("account_id", activeIdRef.current);
+      const res = await fetch(u.toString(), { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Failed to open reply");
       setSelected(json.message);
@@ -113,17 +128,27 @@ export default function InboxPage() {
     }
   }
 
-  // ---- account ----
-  const loadAccount = useCallback(async () => {
+  // ---- accounts ----
+  const loadAccounts = useCallback(async (): Promise<Account[]> => {
+    setAccountsLoading(true);
     try {
       const res = await fetch("/api/mail/account", { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
-      setConnected(!!json?.connected);
-      setAccount(json?.account || null);
-      return !!json?.connected;
+      const list: Account[] = Array.isArray(json?.accounts) ? json.accounts : [];
+      setAccounts(list);
+      // Keep the current selection if it still exists; otherwise pick the
+      // default (or first) account.
+      setActiveAccountId((prev) => {
+        if (prev && list.some((a) => a.id === prev)) return prev;
+        const def = list.find((a) => a.is_default) || list[0];
+        return def ? def.id : null;
+      });
+      return list;
     } catch {
-      setConnected(false);
-      return false;
+      setAccounts([]);
+      return [];
+    } finally {
+      setAccountsLoading(false);
     }
   }, []);
 
@@ -135,6 +160,7 @@ export default function InboxPage() {
       u.searchParams.set("limit", "50");
       u.searchParams.set("mailbox", mb);
       if (q.trim()) u.searchParams.set("search", q.trim());
+      if (activeIdRef.current) u.searchParams.set("account_id", activeIdRef.current);
       const res = await fetch(u.toString(), { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Failed to load messages");
@@ -149,7 +175,9 @@ export default function InboxPage() {
 
   const loadFolders = useCallback(async () => {
     try {
-      const res = await fetch("/api/mail/folders", { cache: "no-store", credentials: "same-origin" });
+      const u = new URL("/api/mail/folders", window.location.origin);
+      if (activeIdRef.current) u.searchParams.set("account_id", activeIdRef.current);
+      const res = await fetch(u.toString(), { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
       setFolders(Array.isArray(json?.folders) ? json.folders : []);
     } catch {
@@ -158,14 +186,21 @@ export default function InboxPage() {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      const ok = await loadAccount();
-      if (ok) {
-        loadFolders();
-        loadMessages("", "INBOX");
-      }
-    })();
-  }, [loadAccount, loadMessages, loadFolders]);
+    loadAccounts();
+  }, [loadAccounts]);
+
+  // When the active mailbox changes (initial pick or the user switching
+  // accounts), sync the ref FIRST, then reload that account's folders + list.
+  useEffect(() => {
+    activeIdRef.current = activeAccountId;
+    if (!activeAccountId) return;
+    setMailbox("INBOX");
+    setSelected(null);
+    setSearch("");
+    loadFolders();
+    loadMessages("", "INBOX");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAccountId]);
 
   // Switch to a different folder: reset the open message and reload its list.
   function switchFolder(mb: string) {
@@ -179,10 +214,10 @@ export default function InboxPage() {
     setMsgLoading(true);
     setSelected(null);
     try {
-      const res = await fetch(
-        `/api/mail/messages/${uid}?mailbox=${encodeURIComponent(mailbox)}`,
-        { cache: "no-store", credentials: "same-origin" }
-      );
+      const u = new URL(`/api/mail/messages/${uid}`, window.location.origin);
+      u.searchParams.set("mailbox", mailbox);
+      if (activeIdRef.current) u.searchParams.set("account_id", activeIdRef.current);
+      const res = await fetch(u.toString(), { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Failed to open message");
       setSelected(json.message);
@@ -196,7 +231,7 @@ export default function InboxPage() {
   }
 
   // ---- render states ----
-  if (connected === null) {
+  if (accountsLoading) {
     return (
       <div className="rounded-lg border border-gray-800 bg-gray-900 p-6 text-sm text-gray-400">
         Loading…
@@ -204,21 +239,26 @@ export default function InboxPage() {
     );
   }
 
-  if (!connected || showSettings) {
+  // Show the connect form when there are no accounts yet, when adding a new
+  // one, or when editing the active one's settings.
+  if (!connected || showAdd || showSettings) {
+    const editing = !showAdd && showSettings ? activeAccount : null;
     return (
       <ConnectForm
-        account={account}
-        onCancel={connected ? () => setShowSettings(false) : undefined}
+        account={editing}
+        onCancel={connected ? () => { setShowAdd(false); setShowSettings(false); } : undefined}
         onConnected={async () => {
+          setShowAdd(false);
           setShowSettings(false);
-          const ok = await loadAccount();
-          if (ok) loadMessages();
+          await loadAccounts();
         }}
         onDisconnected={async () => {
           setShowSettings(false);
+          setShowAdd(false);
           setSelected(null);
           setMessages([]);
-          await loadAccount();
+          setActiveAccountId(null); // re-pick the default from the fresh list
+          await loadAccounts();
         }}
       />
     );
@@ -228,7 +268,7 @@ export default function InboxPage() {
     <div className="space-y-4">
       <SectionHeader
         title="Inbox"
-        description={account ? `Connected: ${account.username}` : "Read and reply to email replies"}
+        description={activeAccount ? `Viewing: ${activeAccount.username}` : "Read and reply to email replies"}
       >
         <button
           onClick={() => loadMessages(search, mailbox)}
@@ -239,13 +279,44 @@ export default function InboxPage() {
           Refresh
         </button>
         <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium"
+        >
+          <Plus className="w-4 h-4" />
+          Add mailbox
+        </button>
+        <button
           onClick={() => setShowSettings(true)}
           className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium"
         >
           <Settings2 className="w-4 h-4" />
-          Mailbox settings
+          Settings
         </button>
       </SectionHeader>
+
+      {/* Account picker — one tab per connected mailbox. */}
+      {accounts.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {accounts.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => setActiveAccountId(a.id)}
+              title={a.username}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border ${
+                a.id === activeAccountId
+                  ? "bg-emerald-600 border-emerald-500 text-white"
+                  : "bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600"
+              }`}
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span className="max-w-[200px] truncate">{a.label || a.username}</span>
+              {a.is_default && (
+                <span className="text-[10px] uppercase tracking-wide opacity-70">default</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* View tabs: full mailbox vs replies+reactions to offers/catalogues */}
       <div className="flex items-center gap-2 border-b border-gray-800 pb-2">
@@ -365,7 +436,8 @@ export default function InboxPage() {
             <MessageView
               message={selected}
               mailbox={mailbox}
-              fromName={account?.from_name || ""}
+              accountId={activeAccountId}
+              fromName={activeAccount?.from_name || ""}
               onBack={() => setSelected(null)}
               onMarkUnread={(uid) => {
                 // Reflect unread in the list (bold) and return to the list view.
@@ -387,7 +459,8 @@ export default function InboxPage() {
           onOpenReply={openReply}
           selected={selected}
           msgLoading={msgLoading}
-          fromName={account?.from_name || ""}
+          accountId={activeAccountId}
+          fromName={activeAccount?.from_name || ""}
           onClearSelected={() => setSelected(null)}
         />
       )}
@@ -406,6 +479,7 @@ function ResponsesPane({
   onOpenReply,
   selected,
   msgLoading,
+  accountId,
   fromName,
   onClearSelected,
 }: {
@@ -417,6 +491,7 @@ function ResponsesPane({
   onOpenReply: (uid: number) => void;
   selected: MsgFull | null;
   msgLoading: boolean;
+  accountId: string | null;
   fromName: string;
   onClearSelected: () => void;
 }) {
@@ -502,6 +577,7 @@ function ResponsesPane({
           <MessageView
             message={selected}
             mailbox="INBOX"
+            accountId={accountId}
             fromName={fromName}
             onBack={onClearSelected}
             onMarkUnread={() => onClearSelected()}
@@ -517,16 +593,19 @@ function ResponsesPane({
 function MessageView({
   message,
   mailbox,
+  accountId,
   fromName,
   onBack,
   onMarkUnread,
 }: {
   message: MsgFull;
   mailbox: string;
+  accountId: string | null;
   fromName: string;
   onBack: () => void;
   onMarkUnread: (uid: number) => void;
 }) {
+  const acctQuery = accountId ? `&account_id=${encodeURIComponent(accountId)}` : "";
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [sending, setSending] = useState(false);
@@ -535,7 +614,7 @@ function MessageView({
   async function markUnread() {
     setMarkingUnread(true);
     try {
-      const res = await fetch(`/api/mail/messages/${message.uid}`, {
+      const res = await fetch(`/api/mail/messages/${message.uid}?account_id=${encodeURIComponent(accountId || "")}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
@@ -560,7 +639,7 @@ function MessageView({
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ body: replyText, mailbox }),
+        body: JSON.stringify({ body: replyText, mailbox, account_id: accountId }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Failed to send reply");
@@ -604,7 +683,7 @@ function MessageView({
             {message.attachments.map((a, i) => (
               <a
                 key={i}
-                href={`/api/mail/messages/${message.uid}/attachments/${i}?mailbox=${encodeURIComponent(mailbox)}`}
+                href={`/api/mail/messages/${message.uid}/attachments/${i}?mailbox=${encodeURIComponent(mailbox)}${acctQuery}`}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-gray-800 border border-gray-700 hover:border-emerald-600 hover:text-emerald-300 text-[11px] text-gray-300"
@@ -712,6 +791,7 @@ function ConnectForm({
   const [username, setUsername] = useState(account?.username || "");
   const [password, setPassword] = useState("");
   const [fromName, setFromName] = useState(account?.from_name || "");
+  const [label, setLabel] = useState(account?.label || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -732,12 +812,14 @@ function ConnectForm({
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
+          id: account?.id, // present = update this account; absent = create new
           imap_host: host.trim(),
           imap_port: Number(port) || 993,
           imap_secure: secure,
           username: username.trim(),
           password, // blank on edit = keep existing
           from_name: fromName.trim() || null,
+          label: label.trim() || null,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -752,10 +834,14 @@ function ConnectForm({
   }
 
   async function disconnect() {
+    if (!account?.id) return;
     if (!confirm("Disconnect this mailbox? Your saved credentials will be removed.")) return;
     setBusy(true);
     try {
-      await fetch("/api/mail/account", { method: "DELETE", credentials: "same-origin" });
+      await fetch(`/api/mail/account?id=${encodeURIComponent(account.id)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
       toast({ title: "Mailbox disconnected" });
       onDisconnected();
     } finally {
@@ -873,6 +959,18 @@ function ConnectForm({
               placeholder="Shown as the sender name on your replies"
               className={fieldCls}
             />
+          </div>
+          <div className="md:col-span-2">
+            <label className={labelCls}>Mailbox label (optional)</label>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="A short name for this mailbox, e.g. Sales inbox"
+              className={fieldCls}
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Shown on the account tabs so you can tell multiple mailboxes apart.
+            </p>
           </div>
         </div>
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
-import { getMailAccountRow, toImapConfig } from "@/lib/mailAccount";
+import { resolveMailAccount, toImapConfig } from "@/lib/mailAccount";
 import { getMessage, setMessageSeen } from "@/lib/imap";
 
 export const dynamic = "force-dynamic";
@@ -16,12 +16,13 @@ export async function GET(req: Request, { params }: { params: { uid: string } })
     return NextResponse.json({ error: "Invalid message id" }, { status: 400 });
   }
 
-  const row = await getMailAccountRow(session.id);
+  const url = new URL(req.url);
+  const row = await resolveMailAccount(session.id, url.searchParams.get("account_id"));
   if (!row) {
     return NextResponse.json({ error: "No mailbox connected" }, { status: 409 });
   }
 
-  const mailbox = new URL(req.url).searchParams.get("mailbox") || "INBOX";
+  const mailbox = url.searchParams.get("mailbox") || "INBOX";
 
   try {
     const message = await getMessage(toImapConfig(row), uid, mailbox);
@@ -48,7 +49,7 @@ export async function PATCH(req: Request, { params }: { params: { uid: string } 
     return NextResponse.json({ error: "Invalid message id" }, { status: 400 });
   }
 
-  const row = await getMailAccountRow(session.id);
+  const row = await resolveMailAccount(session.id, new URL(req.url).searchParams.get("account_id"));
   if (!row) return NextResponse.json({ error: "No mailbox connected" }, { status: 409 });
 
   const body = await req.json().catch(() => ({}));

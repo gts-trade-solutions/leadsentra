@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
-import { getMailAccountRow, toImapConfig } from "@/lib/mailAccount";
+import { resolveMailAccount, toImapConfig } from "@/lib/mailAccount";
 import { listFolders } from "@/lib/imap";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** GET /api/mail/folders — selectable mailboxes for the connected account. */
-export async function GET() {
+/** GET /api/mail/folders?account_id=... — selectable mailboxes for one account. */
+export async function GET(req: Request) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const row = await getMailAccountRow(session.id);
+  const accountId = new URL(req.url).searchParams.get("account_id");
+  const row = await resolveMailAccount(session.id, accountId);
   if (!row) return NextResponse.json({ error: "No mailbox connected" }, { status: 409 });
 
   try {

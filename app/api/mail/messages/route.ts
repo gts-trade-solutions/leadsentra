@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
-import { getMailAccountRow, toImapConfig } from "@/lib/mailAccount";
+import { resolveMailAccount, toImapConfig } from "@/lib/mailAccount";
 import { listMessages } from "@/lib/imap";
 
 export const dynamic = "force-dynamic";
@@ -14,12 +14,12 @@ export async function GET(req: Request) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const row = await getMailAccountRow(session.id);
+  const url = new URL(req.url);
+  const row = await resolveMailAccount(session.id, url.searchParams.get("account_id"));
   if (!row) {
     return NextResponse.json({ error: "No mailbox connected", connected: false }, { status: 409 });
   }
 
-  const url = new URL(req.url);
   const limit = Number(url.searchParams.get("limit") || 50);
   const search = url.searchParams.get("search") || "";
   const mailbox = url.searchParams.get("mailbox") || "INBOX";

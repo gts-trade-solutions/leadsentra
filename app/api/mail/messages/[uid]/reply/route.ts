@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
-import { getMailAccountRow, toImapConfig } from "@/lib/mailAccount";
+import { resolveMailAccount, toImapConfig } from "@/lib/mailAccount";
 import { getReplyTarget, appendToSent, buildRfc822 } from "@/lib/imap";
 import { sendEmail } from "@/lib/emailProvider";
 
@@ -29,7 +29,9 @@ export async function POST(req: Request, { params }: { params: { uid: string } }
     return NextResponse.json({ error: "Reply body is required" }, { status: 400 });
   }
 
-  const row = await getMailAccountRow(session.id);
+  // Reply from the account that received the message (named by the client),
+  // falling back to the user's default mailbox.
+  const row = await resolveMailAccount(session.id, body.account_id);
   if (!row) return NextResponse.json({ error: "No mailbox connected" }, { status: 409 });
 
   const cfg = toImapConfig(row);

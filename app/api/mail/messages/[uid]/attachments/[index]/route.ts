@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
-import { getMailAccountRow, toImapConfig } from "@/lib/mailAccount";
+import { resolveMailAccount, toImapConfig } from "@/lib/mailAccount";
 import { getAttachment } from "@/lib/imap";
 
 export const dynamic = "force-dynamic";
@@ -23,10 +23,11 @@ export async function GET(
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const row = await getMailAccountRow(session.id);
+  const url = new URL(req.url);
+  const row = await resolveMailAccount(session.id, url.searchParams.get("account_id"));
   if (!row) return NextResponse.json({ error: "No mailbox connected" }, { status: 409 });
 
-  const mailbox = new URL(req.url).searchParams.get("mailbox") || "INBOX";
+  const mailbox = url.searchParams.get("mailbox") || "INBOX";
 
   try {
     const att = await getAttachment(toImapConfig(row), uid, index, mailbox);
