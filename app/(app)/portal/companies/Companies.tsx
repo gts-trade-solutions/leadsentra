@@ -81,6 +81,30 @@ function sizeMatchesBucket(sizeStr: string, bucket: SizeBucket): boolean {
   }
 }
 
+/**
+ * The data columns a user can show or hide. Order here is the order they
+ * render in; Table pairs headers with Object.values(row) positionally, so the
+ * header list and the cell object must be built from this same list.
+ */
+const COMPANY_COLUMNS = [
+  { key: "name", label: "Company Name" },
+  { key: "companyId", label: "Company ID" },
+  { key: "companyType", label: "Company Type" },
+  { key: "segment", label: "Segment" },
+  { key: "region", label: "Region" },
+  { key: "location", label: "Country" },
+  { key: "contacts", label: "Contacts" },
+] as const;
+
+type CompanyColumnKey = (typeof COMPANY_COLUMNS)[number]["key"];
+
+// Segment is off by default so the table looks unchanged for existing users.
+const DEFAULT_COMPANY_COLUMNS = COMPANY_COLUMNS.filter(
+  (c) => c.key !== "segment"
+).map((c) => c.label);
+
+const COMPANY_COLUMNS_KEY = "leadsentra.companies.columns";
+
 type Row = {
   company_id: string;
   name: string; // trading_name || legal_name
@@ -177,6 +201,8 @@ export default function CompaniesPage() {
 
   // Admin-only "Select" column drives the bulk-delete flow. Hidden for
   // everyone else so the checkboxes don't tease a capability they don't have.
+  // The middle columns are user-selectable (see visibleColumns); Select and
+  // Actions always show since they are controls, not data.
   const headers: (string | JSX.Element)[] = [
     ...(isAdmin
       ? [
@@ -189,18 +215,46 @@ export default function CompaniesPage() {
           />,
         ]
       : []),
-    "Company Name",
-    "Company ID",
-    "Company Type",
-    "Region",
-    "Country",
-    "Contacts",
+    ...COMPANY_COLUMNS.filter((c) => visibleColumns.includes(c.label)).map((c) => c.label),
     "Actions",
   ];
 
   // search / filters / sort / pagination
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Which data columns the table shows. Chosen by label so the picker (a
+  // MultiSelectFilter) can work in plain strings; Select/Actions aren't listed
+  // because they're controls rather than data. Persisted per browser.
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(
+    DEFAULT_COMPANY_COLUMNS
+  );
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(COMPANY_COLUMNS_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length) {
+        // Drop labels from older builds that no longer exist.
+        const known = parsed.filter((l: unknown): l is string =>
+          COMPANY_COLUMNS.some((c) => c.label === l)
+        );
+        if (known.length) setVisibleColumns(known);
+      }
+    } catch {
+      /* corrupt or unavailable storage — keep the defaults */
+    }
+  }, []);
+  const changeColumns = (next: string[]) => {
+    // Never leave the table with no data columns at all.
+    const safe = next.length ? next : [COMPANY_COLUMNS[0].label];
+    setVisibleColumns(safe);
+    try {
+      localStorage.setItem(COMPANY_COLUMNS_KEY, JSON.stringify(safe));
+    } catch {
+      /* private mode — the choice just won't persist */
+    }
+  };
+
   // companyType / country / segment hold MANY values (empty array = no filter).
   // They outgrew a native <select> once imports pushed the option lists into
   // the hundreds, so they render as searchable multi-selects.
@@ -322,9 +376,14 @@ export default function CompaniesPage() {
     departments: [] as string[],
   });
 
+  // True while the Segment field is a free-text box instead of the dropdown,
+  // so a segment that doesn't exist yet can be typed in.
+  const [customSegment, setCustomSegment] = useState(false);
+
   async function openCompanyEdit(r: Row) {
     setEditCompanyErr(null);
     setEditCompanyId(r.company_id);
+    setCustomSegment(false);
     // Prefill from the row (full company is not always loaded; admin can
     // refine via the full company modal if they need more fields).
     setEditCompanyForm({
@@ -398,6 +457,25 @@ export default function CompaniesPage() {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j?.error || "Update failed");
+
+      // Register a newly typed segment so it joins the dropdown everywhere
+      // instead of only living on this one company. Best-effort: the company
+      // itself already saved, so a failure here isn't worth blocking on.
+      const seg = editCompanyForm.segment.trim();
+      if (seg && !segmentOptions.includes(seg)) {
+        try {
+          await fetch("/api/companies/segments", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ name: seg }),
+          });
+          await loadSegments();
+        } catch {
+          /* the company saved; the segment just isn't registered yet */
+        }
+      }
+
       toast({ title: "Company updated" });
       setEditCompanyId(null);
       await load();
@@ -760,6 +838,75 @@ export default function CompaniesPage() {
   };
 
   // open contacts modal (ONLY unlocked contacts)
+  // Inline contact editing inside the Contact View modal.
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [contactEditBusy, setContactEditBusy] = useState(false);
+  const [contactEditErr, setContactEditErr] = useState<string | null>(null);
+  const [contactEditForm, setContactEditForm] = useState({
+    contact_name: "",
+    title: "",
+    email: "",
+    phone: "",
+    linkedin_url: "",
+  });
+
+  function startContactEdit(c: ContactMini) {
+    setContactEditErr(null);
+    setEditingContactId(c.id);
+    setContactEditForm({
+      contact_name: c.contact_name || "",
+      title: c.title || "",
+      email: c.email || "",
+      phone: c.phone || "",
+      linkedin_url: c.linkedin_url || "",
+    });
+  }
+
+  async function saveContactEdit() {
+    if (!editingContactId) return;
+    setContactEditBusy(true);
+    setContactEditErr(null);
+    try {
+      const res = await fetch(`/api/contacts/${encodeURIComponent(editingContactId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          contact_name: contactEditForm.contact_name.trim(),
+          title: contactEditForm.title.trim(),
+          email: contactEditForm.email.trim(),
+          phone: contactEditForm.phone.trim(),
+          linkedin_url: contactEditForm.linkedin_url.trim(),
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Update failed");
+
+      // Patch the row in place — reopening the modal would lose the scroll
+      // position and re-fetch the whole company for one changed field.
+      setCompanyContacts((prev) =>
+        prev.map((c) =>
+          c.id === editingContactId
+            ? {
+                ...c,
+                contact_name: contactEditForm.contact_name.trim(),
+                title: contactEditForm.title.trim() || null,
+                email: contactEditForm.email.trim() || null,
+                phone: contactEditForm.phone.trim() || null,
+                linkedin_url: contactEditForm.linkedin_url.trim() || null,
+              }
+            : c
+        )
+      );
+      setEditingContactId(null);
+      toast({ title: "Contact updated" });
+    } catch (e: any) {
+      setContactEditErr(e?.message || "Update failed");
+    } finally {
+      setContactEditBusy(false);
+    }
+  }
+
   const openContactsModal = async (company_id: string) => {
     setSelectedCompanyId(company_id);
     setContactsModalOpen(true);
@@ -767,6 +914,8 @@ export default function CompaniesPage() {
     setContactsError(null);
     setCompanyContacts([]);
     setSelectedCompanyName("");
+    setEditingContactId(null);
+    setContactEditErr(null);
 
     // NEW: capture the total contacts you show in the table for this company
     const rowForCompany = allRows.find((r) => r.company_id === company_id);
@@ -802,56 +951,76 @@ export default function CompaniesPage() {
     }
   };
 
-  // table data mapping
-  const tableData = currentRows.map((r) => ({
-    ...(isAdmin
-      ? {
-          Select: (
-            <input
-              type="checkbox"
-              checked={selectedIds.has(r.company_id)}
-              onChange={(e) => {
-                setSelectedIds((prev) => {
-                  const next = new Set(prev);
-                  if (e.target.checked) next.add(r.company_id);
-                  else next.delete(r.company_id);
-                  return next;
-                });
-              }}
-              aria-label={`Select ${r.name}`}
-            />
-          ),
-        }
-      : {}),
-    name: (
-      <button
-        onClick={() => openCompanyModal(r.company_id)}
-        className="text-emerald-400 hover:underline"
-        title="View company details"
-      >
-        {r.name}
-      </button>
-    ),
-    companyId: (
-      <span className="font-mono text-xs text-gray-400" title={r.company_id}>
-        {r.company_id}
-      </span>
-    ),
-    companyType: r.companyType || "—",
-    // Header reads "Region"; backed by companies.meta.city_regency.
-    region: r.city_regency || "—",
-    // Header reads "Country"; backed by companies.country (see load()).
-    location: r.location || "—",
-    contacts: (
-      <button
-        onClick={() => openContactsModal(r.company_id)}
-        className="inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs"
-        title="View unlocked contacts"
-      >
-        View ({r.contacts})
-      </button>
-    ),
-    Actions: (
+  // table data mapping. Table renders Object.values(row) positionally against
+  // `headers`, so a hidden column must be omitted from BOTH — hence building
+  // the cells in COMPANY_COLUMNS order and skipping the ones switched off.
+  const renderCell = (key: CompanyColumnKey, r: (typeof currentRows)[number]) => {
+    switch (key) {
+      case "name":
+        return (
+          <button
+            onClick={() => openCompanyModal(r.company_id)}
+            className="text-emerald-400 hover:underline"
+            title="View company details"
+          >
+            {r.name}
+          </button>
+        );
+      case "companyId":
+        return (
+          <span className="font-mono text-xs text-gray-400" title={r.company_id}>
+            {r.company_id}
+          </span>
+        );
+      case "companyType":
+        return r.companyType || "—";
+      case "segment":
+        return r.segment || "—";
+      // Header reads "Region"; backed by companies.meta.city_regency.
+      case "region":
+        return r.city_regency || "—";
+      // Header reads "Country"; backed by companies.country (see load()).
+      case "location":
+        return r.location || "—";
+      case "contacts":
+        return (
+          <button
+            onClick={() => openContactsModal(r.company_id)}
+            className="inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs"
+            title="View unlocked contacts"
+          >
+            View ({r.contacts})
+          </button>
+        );
+      default:
+        return "—";
+    }
+  };
+
+  const tableData = currentRows.map((r) => {
+    const cells: Record<string, JSX.Element | string> = {};
+    if (isAdmin) {
+      cells.Select = (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(r.company_id)}
+          onChange={(e) => {
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              if (e.target.checked) next.add(r.company_id);
+              else next.delete(r.company_id);
+              return next;
+            });
+          }}
+          aria-label={`Select ${r.name}`}
+        />
+      );
+    }
+    for (const col of COMPANY_COLUMNS) {
+      if (!visibleColumns.includes(col.label)) continue;
+      cells[col.key] = renderCell(col.key, r);
+    }
+    cells.Actions = (
       <button
         onClick={() => openCompanyEdit(r)}
         className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
@@ -859,8 +1028,9 @@ export default function CompaniesPage() {
       >
         <Pencil className="w-3.5 h-3.5" /> Edit
       </button>
-    ),
-  }));
+    );
+    return cells;
+  });
 
   // admin: template CSV (now with new columns)
   async function downloadCompaniesTemplateCsv() {
@@ -1243,6 +1413,18 @@ export default function CompaniesPage() {
             >
               Clear
             </button>
+            {/* Column chooser — which data columns the table shows. */}
+            <div className="w-56">
+              <MultiSelectFilter
+                id="companies-columns"
+                label="Columns"
+                options={COMPANY_COLUMNS.map((c) => c.label)}
+                selected={visibleColumns}
+                onChange={changeColumns}
+                placeholder="Choose columns"
+                searchPlaceholder="Search columns…"
+              />
+            </div>
             <div className="ml-auto text-xs text-gray-400">
               Showing <b>{rows.length}</b> of <b>{allRows.length}</b>
             </div>
@@ -1464,34 +1646,60 @@ export default function CompaniesPage() {
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Segment</label>
-                {segmentOptions.length > 0 ? (
-                  <select
-                    value={editCompanyForm.segment}
-                    onChange={(e) => setEditCompanyForm((f) => ({ ...f, segment: e.target.value }))}
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
-                  >
-                    <option value="">—</option>
-                    {/* A segment that arrived by import may not be registered in
-                        company_segments yet. Without an option to match it the
-                        select renders blank and silently clears the value on
-                        save, so surface the stored value as its own option. */}
-                    {editCompanyForm.segment &&
-                      !segmentOptions.includes(editCompanyForm.segment) && (
-                        <option value={editCompanyForm.segment}>
-                          {editCompanyForm.segment} (not in list)
-                        </option>
-                      )}
-                    {segmentOptions.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
+                {segmentOptions.length > 0 && !customSegment ? (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={editCompanyForm.segment}
+                      onChange={(e) => setEditCompanyForm((f) => ({ ...f, segment: e.target.value }))}
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                    >
+                      <option value="">—</option>
+                      {/* A segment that arrived by import may not be registered in
+                          company_segments yet. Without an option to match it the
+                          select renders blank and silently clears the value on
+                          save, so surface the stored value as its own option. */}
+                      {editCompanyForm.segment &&
+                        !segmentOptions.includes(editCompanyForm.segment) && (
+                          <option value={editCompanyForm.segment}>
+                            {editCompanyForm.segment} (not in list)
+                          </option>
+                        )}
+                      {segmentOptions.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setCustomSegment(true)}
+                      title="Type a segment that isn't in the list"
+                      className="shrink-0 px-2.5 py-2 rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 ) : (
-                  <input
-                    value={editCompanyForm.segment}
-                    onChange={(e) => setEditCompanyForm((f) => ({ ...f, segment: e.target.value }))}
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={editCompanyForm.segment}
+                      onChange={(e) => setEditCompanyForm((f) => ({ ...f, segment: e.target.value }))}
+                      placeholder="Type a segment…"
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                    />
+                    {segmentOptions.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setCustomSegment(false)}
+                        title="Pick from the existing list instead"
+                        className="shrink-0 px-2.5 py-2 rounded-lg border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs"
+                      >
+                        List
+                      </button>
+                    )}
+                  </div>
                 )}
+                <p className="text-[11px] text-gray-500 mt-1">
+                  A typed segment is registered for everyone when you save.
+                </p>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Size</label>
@@ -1861,6 +2069,11 @@ export default function CompaniesPage() {
                       ) : null}
                     </>
                   )}
+                  {contactEditErr && (
+                    <div className="mb-2 rounded border border-red-700 bg-red-900/20 px-3 py-2 text-xs text-red-200">
+                      {contactEditErr}
+                    </div>
+                  )}
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left border-b border-gray-700">
@@ -1869,44 +2082,131 @@ export default function CompaniesPage() {
                         <th className="py-2 pr-4">Email</th>
                         <th className="py-2 pr-4">Phone</th>
                         <th className="py-2 pr-4">Social</th>
+                        <th className="py-2 pr-4 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {companyContacts.map((c) => (
-                        <tr key={c.id} className="border-b border-gray-800">
-                          <td className="py-2 pr-4">{c.contact_name}</td>
-                          <td className="py-2 pr-4">{c.title || ""}</td>
-                          <td className="py-2 pr-4">
-                            {c.email ? (
-                              <a
-                                className="text-emerald-400 hover:underline"
-                                href={`mailto:${c.email}`}
-                              >
-                                {c.email}
-                              </a>
-                            ) : (
-                              ""
-                            )}
-                          </td>
-                          <td className="py-2 pr-4">{c.phone || ""}</td>
-                          <td className="py-2 pr-4">
-                            <div className="flex items-center gap-1">
-                              <SocialIcon url={c.linkedin_url} label="LinkedIn">
-                                <Linkedin className="w-4 h-4" />
-                              </SocialIcon>
-                              <SocialIcon url={c.facebook_url} label="Facebook">
-                                <Facebook className="w-4 h-4" />
-                              </SocialIcon>
-                              <SocialIcon
-                                url={c.instagram_url}
-                                label="Instagram"
-                              >
-                                <Instagram className="w-4 h-4" />
-                              </SocialIcon>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {companyContacts.map((c) =>
+                        editingContactId === c.id ? (
+                          // Inline edit row — saves straight to PATCH /api/contacts/:id
+                          // so a wrong phone or email can be fixed here instead of
+                          // navigating to the Contacts page and searching for it.
+                          <tr key={c.id} className="border-b border-gray-800 bg-gray-800/40">
+                            <td className="py-2 pr-4">
+                              <input
+                                value={contactEditForm.contact_name}
+                                onChange={(e) =>
+                                  setContactEditForm((f) => ({ ...f, contact_name: e.target.value }))
+                                }
+                                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-200"
+                              />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input
+                                value={contactEditForm.title}
+                                onChange={(e) =>
+                                  setContactEditForm((f) => ({ ...f, title: e.target.value }))
+                                }
+                                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-200"
+                              />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input
+                                value={contactEditForm.email}
+                                onChange={(e) =>
+                                  setContactEditForm((f) => ({ ...f, email: e.target.value }))
+                                }
+                                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-200"
+                              />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input
+                                value={contactEditForm.phone}
+                                onChange={(e) =>
+                                  setContactEditForm((f) => ({ ...f, phone: e.target.value }))
+                                }
+                                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-200"
+                              />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input
+                                value={contactEditForm.linkedin_url}
+                                onChange={(e) =>
+                                  setContactEditForm((f) => ({ ...f, linkedin_url: e.target.value }))
+                                }
+                                placeholder="LinkedIn URL"
+                                className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-200"
+                              />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={saveContactEdit}
+                                  disabled={contactEditBusy}
+                                  className="px-2.5 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                                >
+                                  {contactEditBusy ? "Saving…" : "Save"}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setEditingContactId(null);
+                                    setContactEditErr(null);
+                                  }}
+                                  disabled={contactEditBusy}
+                                  className="px-2.5 py-1 text-xs rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={c.id} className="border-b border-gray-800">
+                            <td className="py-2 pr-4">{c.contact_name}</td>
+                            <td className="py-2 pr-4">{c.title || ""}</td>
+                            <td className="py-2 pr-4">
+                              {c.email ? (
+                                <a
+                                  className="text-emerald-400 hover:underline"
+                                  href={`mailto:${c.email}`}
+                                >
+                                  {c.email}
+                                </a>
+                              ) : (
+                                ""
+                              )}
+                            </td>
+                            <td className="py-2 pr-4">{c.phone || ""}</td>
+                            <td className="py-2 pr-4">
+                              <div className="flex items-center gap-1">
+                                <SocialIcon url={c.linkedin_url} label="LinkedIn">
+                                  <Linkedin className="w-4 h-4" />
+                                </SocialIcon>
+                                <SocialIcon url={c.facebook_url} label="Facebook">
+                                  <Facebook className="w-4 h-4" />
+                                </SocialIcon>
+                                <SocialIcon
+                                  url={c.instagram_url}
+                                  label="Instagram"
+                                >
+                                  <Instagram className="w-4 h-4" />
+                                </SocialIcon>
+                              </div>
+                            </td>
+                            <td className="py-2 pr-4">
+                              <div className="flex justify-end">
+                                <button
+                                  onClick={() => startContactEdit(c)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                  title="Edit this contact"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" /> Edit
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      )}
                     </tbody>
                   </table>
                 </div>

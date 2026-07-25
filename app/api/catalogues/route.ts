@@ -47,16 +47,37 @@ export async function GET(req: NextRequest) {
   }
 
   if (scoped) {
-    if (companyId) {
+    // company_id accepts a comma-separated list so the page can target several
+    // companies at once; a single id is just a list of one.
+    const companyIds = (companyId || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (companyIds.length === 1) {
       where.push("(company_id = ? OR company_id IS NULL)");
-      params.push(companyId);
+      params.push(companyIds[0]);
+    } else if (companyIds.length > 1) {
+      where.push(
+        `(company_id IN (${companyIds.map(() => "?").join(", ")}) OR company_id IS NULL)`
+      );
+      params.push(...companyIds);
     } else {
       // "All companies (overall)" chosen — only global items apply.
       where.push("company_id IS NULL");
     }
-    if (department) {
+    // department likewise accepts a list.
+    const departments = (department || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (departments.length === 1) {
       where.push("(department = ? OR department IS NULL)");
-      params.push(department);
+      params.push(departments[0]);
+    } else if (departments.length > 1) {
+      where.push(
+        `(department IN (${departments.map(() => "?").join(", ")}) OR department IS NULL)`
+      );
+      params.push(...departments);
     }
   }
   if (kind && ALLOWED_KINDS.has(kind)) {

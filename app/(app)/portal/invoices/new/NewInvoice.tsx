@@ -20,6 +20,9 @@ type ContactOpt = {
 
 type ItemRow = { part_no: string; description: string; hsn: string; quantity: string; unit_price: string };
 
+/** Which tax this invoice carries. GST and IGST are mutually exclusive. */
+type TaxKind = "gst" | "igst" | "none";
+
 const blankItem = (): ItemRow => ({ part_no: "", description: "", hsn: "", quantity: "1", unit_price: "0" });
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -54,8 +57,12 @@ export default function NewInvoice() {
   const [issueDate, setIssueDate] = useState(todayStr());
   const [validUntil, setValidUntil] = useState("");
   const [discount, setDiscount] = useState("0");
+  // An invoice carries GST or IGST, never both: GST for supply inside the
+  // seller's state, IGST across state lines. Keeping two rate fields let a
+  // user charge both at once, which is never correct.
+  const [taxKind, setTaxKind] = useState<TaxKind>("gst");
   const [taxRate, setTaxRate] = useState("18");
-  const [igstRate, setIgstRate] = useState("0");
+  const [igstRate, setIgstRate] = useState("18");
   const [bank, setBank] = useState({ name: "", account: "", branch: "", ifsc: "" });
   const [ref, setRef] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
@@ -160,6 +167,10 @@ export default function NewInvoice() {
     return base.slice(0, 50);
   }, [contacts, contactQuery]);
 
+  // Only the selected tax is charged; the other leg is always zero.
+  const effectiveGst = taxKind === "gst" ? num(taxRate, 0) : 0;
+  const effectiveIgst = taxKind === "igst" ? num(igstRate, 0) : 0;
+
   const totals = useMemo(() => {
     const normalized = normalizeItems(
       items.map((it) => ({
@@ -171,10 +182,10 @@ export default function NewInvoice() {
       }))
     );
     return {
-      ...computeTotals(normalized, num(discount, 0), num(taxRate, 0), num(igstRate, 0)),
+      ...computeTotals(normalized, num(discount, 0), effectiveGst, effectiveIgst),
       count: normalized.length,
     };
-  }, [items, discount, taxRate, igstRate]);
+  }, [items, discount, effectiveGst, effectiveIgst]);
 
   function updateItem(idx: number, patch: Partial<ItemRow>) {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -239,8 +250,8 @@ export default function NewInvoice() {
       issue_date: issueDate,
       valid_until: validUntil || null,
       discount: num(discount, 0),
-      tax_rate: num(taxRate, 0),
-      igst_rate: num(igstRate, 0),
+      tax_rate: effectiveGst,
+      igst_rate: effectiveIgst,
       ref: ref || null,
       payment_terms: paymentTerms || null,
       delivery_terms: deliveryTerms || null,
@@ -663,17 +674,36 @@ export default function NewInvoice() {
                       <input className={inputCls} value={discount} onChange={(e) => setDiscount(e.target.value)} inputMode="decimal" />
                     </div>
                     <div>
-                      <label className={labelCls}>GST (%)</label>
-                      <input className={inputCls} value={taxRate} onChange={(e) => setTaxRate(e.target.value)} inputMode="decimal" placeholder="18" />
+                      <label className={labelCls}>Tax</label>
+                      <select
+                        className={inputCls}
+                        value={taxKind}
+                        onChange={(e) => setTaxKind(e.target.value as TaxKind)}
+                      >
+                        <option value="gst">GST (intra-state)</option>
+                        <option value="igst">IGST (inter-state)</option>
+                        <option value="none">No tax</option>
+                      </select>
                     </div>
                     <div>
-                      <label className={labelCls}>IGST (%)</label>
-                      <input className={inputCls} value={igstRate} onChange={(e) => setIgstRate(e.target.value)} inputMode="decimal" placeholder="0" />
+                      <label className={labelCls}>
+                        {taxKind === "igst" ? "IGST (%)" : "GST (%)"}
+                      </label>
+                      <input
+                        className={inputCls}
+                        value={taxKind === "igst" ? igstRate : taxRate}
+                        onChange={(e) =>
+                          taxKind === "igst" ? setIgstRate(e.target.value) : setTaxRate(e.target.value)
+                        }
+                        inputMode="decimal"
+                        placeholder="18"
+                        disabled={taxKind === "none"}
+                      />
                     </div>
                     <div className="col-span-2">
                       <p className="text-xs text-gray-500">
-                        Set GST for intra-state or IGST for inter-state supply — leave the other at 0. Both are charged
-                        on (subtotal − discount) and print as separate lines.
+                        GST for supply within your state, IGST for another state. Only the chosen one is charged
+                        — on (subtotal − discount) — and only it prints on the invoice.
                       </p>
                     </div>
                   </div>

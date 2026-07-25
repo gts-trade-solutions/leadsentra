@@ -142,5 +142,23 @@ export async function GET(req: Request) {
     : [session.id, search, like, like, like, ...accessParams];
 
   const [rows] = await db.execute(sql, params);
-  return NextResponse.json({ data: rows });
+
+  // The list is capped by LIMIT, so the page can't derive the real total by
+  // counting what it received. Run the same predicate as a COUNT so the header
+  // can show how many contacts exist, not just how many were fetched.
+  const countSql = `SELECT COUNT(*) AS total
+     FROM contacts c
+     LEFT JOIN companies co ON co.company_id = c.company_id
+     ${unlockJoin}
+     WHERE (? = '' OR c.contact_name LIKE ? OR c.email LIKE ? OR co.company_name LIKE ?)
+     ${accessSql}`;
+  let total = (rows as any[]).length;
+  try {
+    const [countRows] = await db.execute(countSql, params);
+    total = Number((countRows as any[])[0]?.total ?? total);
+  } catch (e) {
+    console.error("[contacts] count failed", e);
+  }
+
+  return NextResponse.json({ data: rows, total, limit, offset });
 }

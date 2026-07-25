@@ -25,12 +25,25 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}));
 
-  const [profileRows, settingsRows] = await Promise.all([
-    db.execute("SELECT full_name, email, phone, company, gstin, address FROM billing_profiles WHERE user_id = ? LIMIT 1", [session.id]),
-    db.execute("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1", [session.id]),
+  // Preview must still render when the seller profile is missing or its table
+  // hasn't been migrated yet — those are defaults, not requirements. An
+  // unguarded read here surfaced as a bare "Preview failed" in the UI.
+  const readOne = async (sql: string, label: string) => {
+    try {
+      const [rows] = await db.execute(sql, [session.id]);
+      return (rows as any[])[0] || null;
+    } catch (e) {
+      console.error(`[invoices] preview could not read ${label}`, e);
+      return null;
+    }
+  };
+  const [profile, settings] = await Promise.all([
+    readOne(
+      "SELECT full_name, email, phone, company, gstin, address FROM billing_profiles WHERE user_id = ? LIMIT 1",
+      "billing_profiles"
+    ),
+    readOne("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1", "invoice_settings"),
   ]);
-  const profile = (profileRows[0] as any[])[0] || null;
-  const settings = (settingsRows[0] as any[])[0] || null;
 
   const items = normalizeItems(body.items);
   const discount = Math.max(0, num(body.discount, 0));
@@ -120,7 +133,13 @@ export async function POST(req: Request) {
       },
     });
   } catch (e: any) {
+    // Say what actually broke. "Could not render preview." on its own left the
+    // user with nothing to act on and nothing to report.
     console.error("[invoices] preview render failed", e);
-    return NextResponse.json({ error: "Could not render preview." }, { status: 500 });
+    const detail = e?.sqlMessage || e?.message || String(e);
+    return NextResponse.json(
+      { error: `Could not render preview: ${detail}` },
+      { status: 500 }
+    );
   }
 }

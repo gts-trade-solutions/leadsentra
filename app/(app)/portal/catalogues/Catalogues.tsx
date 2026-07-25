@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import SectionHeader from "@/components/SectionHeader";
 import EmptyState from "@/components/EmptyState";
+import MultiSelectFilter from "@/components/MultiSelectFilter";
 import { toast } from "@/hooks/use-toast";
 
 // sessionStorage key the campaign composer reads to prefill a send.
@@ -46,11 +47,13 @@ const ALL_COMPANIES = ""; // company select value meaning "overall / all compani
 export default function CataloguesPage() {
   const router = useRouter();
 
-  // Targeting selection
+  // Targeting selection. Companies and departments are multi-select: an empty
+  // list means "all". companyId/department below keep the single-value shape
+  // the send hand-off and item form still use.
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
-  const [companyId, setCompanyId] = useState<string>(ALL_COMPANIES);
+  const [selectedCompanyNames, setSelectedCompanyNames] = useState<string[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
-  const [department, setDepartment] = useState<string>("");
+  const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   const [kindFilter, setKindFilter] = useState<"" | "catalogue" | "offer">("");
 
   // Library
@@ -63,10 +66,19 @@ export default function CataloguesPage() {
   // Email preview modal (shows exactly what a catalogue/offer will send).
   const [previewItem, setPreviewItem] = useState<CatItem | null>(null);
 
-  const companyName = useMemo(
-    () => companies.find((c) => c.company_id === companyId)?.name || "",
-    [companies, companyId]
+  // MultiSelectFilter works in plain strings, so companies are chosen by name
+  // and mapped back to ids here. Names are unique enough for targeting; a
+  // duplicate name simply targets both, which is the sane reading anyway.
+  const selectedCompanyIds = useMemo(
+    () =>
+      companies
+        .filter((c) => selectedCompanyNames.includes(c.name))
+        .map((c) => c.company_id),
+    [companies, selectedCompanyNames]
   );
+  const companyId = selectedCompanyIds.length === 1 ? selectedCompanyIds[0] : ALL_COMPANIES;
+  const companyName = selectedCompanyNames.length === 1 ? selectedCompanyNames[0] : "";
+  const department = selectedDepartments.length === 1 ? selectedDepartments[0] : "";
 
   // ---- loaders ----
   const loadCompanies = useCallback(async () => {
@@ -82,20 +94,17 @@ export default function CataloguesPage() {
     }
   }, []);
 
-  // Load the chosen company's departments (from the full record's meta).
-  const loadDepartments = useCallback(async (id: string) => {
-    if (!id) {
-      setDepartments([]);
-      return;
-    }
+  // Departments for the chosen companies. This reads the dedicated endpoint,
+  // which unions the companies' own meta.departments with the departments
+  // actually present on their contacts — the old lookup used meta only, so it
+  // came back empty for every imported company.
+  const loadDepartments = useCallback(async (ids: string[]) => {
     try {
-      const res = await fetch(`/api/companies/${encodeURIComponent(id)}/full`, {
-        cache: "no-store",
-        credentials: "same-origin",
-      });
+      const u = new URL("/api/companies/departments", window.location.origin);
+      if (ids.length) u.searchParams.set("company_id", ids.join(","));
+      const res = await fetch(u.toString(), { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
-      const c = json?.company || {};
-      setDepartments(Array.isArray(c?.departments) ? c.departments : []);
+      setDepartments(Array.isArray(json?.departments) ? json.departments : []);
     } catch {
       setDepartments([]);
     }
@@ -106,8 +115,8 @@ export default function CataloguesPage() {
     try {
       const u = new URL("/api/catalogues", window.location.origin);
       u.searchParams.set("scoped", "1");
-      if (companyId) u.searchParams.set("company_id", companyId);
-      if (department) u.searchParams.set("department", department);
+      if (selectedCompanyIds.length) u.searchParams.set("company_id", selectedCompanyIds.join(","));
+      if (selectedDepartments.length) u.searchParams.set("department", selectedDepartments.join(","));
       if (kindFilter) u.searchParams.set("kind", kindFilter);
       const res = await fetch(u.toString(), { cache: "no-store", credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
@@ -117,17 +126,25 @@ export default function CataloguesPage() {
     } finally {
       setLoading(false);
     }
-  }, [companyId, department, kindFilter]);
+    // Depend on the joined ids, not the array identity, so re-renders that
+    // produce an equal selection don't refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompanyIds.join(","), selectedDepartments.join(","), kindFilter]);
 
   useEffect(() => {
     loadCompanies();
   }, [loadCompanies]);
 
-  // When the company changes: refresh its departments and reset the dept pick.
+  // When the company selection changes: refresh departments and drop any
+  // department pick that the new selection no longer offers.
   useEffect(() => {
-    setDepartment("");
-    loadDepartments(companyId);
-  }, [companyId, loadDepartments]);
+    loadDepartments(selectedCompanyIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompanyIds.join(","), loadDepartments]);
+
+  useEffect(() => {
+    setSelectedDepartments((prev) => prev.filter((d) => departments.includes(d)));
+  }, [departments]);
 
   // Auto-show matching items whenever the targeting selection changes.
   useEffect(() => {
@@ -175,9 +192,23 @@ export default function CataloguesPage() {
     router.push("/portal/campaigns/new");
   }
 
-  const targetingLabel = companyId
-    ? `${companyName}${department ? ` › ${department}` : " › all departments"}`
-    : "All companies (overall)";
+  const targetingLabel = (() => {
+    const co =
+      selectedCompanyNames.length === 0
+        ? "All companies (overall)"
+        : selectedCompanyNames.length === 1
+        ? selectedCompanyNames[0]
+        : `${selectedCompanyNames.length} companies`;
+    const dept =
+      selectedDepartments.length === 0
+        ? selectedCompanyNames.length
+          ? " › all departments"
+          : ""
+        : selectedDepartments.length === 1
+        ? ` › ${selectedDepartments[0]}`
+        : ` › ${selectedDepartments.length} departments`;
+    return `${co}${dept}`;
+  })();
 
   return (
     <div className="space-y-6">
@@ -209,38 +240,30 @@ export default function CataloguesPage() {
       <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Company</label>
-            <select
-              value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"
-            >
-              <option value={ALL_COMPANIES}>All companies (overall)</option>
-              {companies.map((c) => (
-                <option key={c.company_id} value={c.company_id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="catalogues-companies"
+              label="Company"
+              options={companies.map((c) => c.name)}
+              selected={selectedCompanyNames}
+              onChange={setSelectedCompanyNames}
+              placeholder="All companies (overall)"
+              searchPlaceholder="Search companies…"
+            />
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Department</label>
-            <select
-              value={department}
-              onChange={(e) => setDepartment(e.target.value)}
-              disabled={!companyId}
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm disabled:opacity-50"
-            >
-              <option value="">{companyId ? "All departments" : "—"}</option>
-              {departments.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-            {companyId && departments.length === 0 && (
+            <MultiSelectFilter
+              id="catalogues-departments"
+              label="Department"
+              options={departments}
+              selected={selectedDepartments}
+              onChange={setSelectedDepartments}
+              placeholder="All departments"
+              searchPlaceholder="Search departments…"
+            />
+            {departments.length === 0 && (
               <p className="text-[11px] text-gray-500 mt-1">
-                This company has no departments yet — add them on the Companies page.
+                No departments found — they come from a company&apos;s Departments field or from
+                the Department column on its contacts.
               </p>
             )}
           </div>

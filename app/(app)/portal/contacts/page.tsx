@@ -158,6 +158,10 @@ export default function ContactsPage() {
   const startIdx = (page - 1) * pageSize;
   const endIdx = Math.min(startIdx + pageSize, rows.length);
 
+  // How many contacts exist in total (from the API's COUNT, not the capped
+  // page of rows the table is showing).
+  const [totalContacts, setTotalContacts] = useState<number | null>(null);
+
   // search/filters/sort
   const [search, setSearch] = useState("");
   // country / segment / companyType hold MANY values (empty array = no filter)
@@ -460,6 +464,9 @@ export default function ContactsPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Failed to load contacts");
       const data: any[] = Array.isArray(json?.data) ? json.data : [];
+      // The API caps how many rows it returns, so the real total comes back
+      // as its own field rather than being counted from `data`.
+      setTotalContacts(typeof json?.total === "number" ? json.total : data.length);
       const mapped: Row[] = data.map((c: any) => ({
         id: c.id,
         name: c.name ?? "",
@@ -1209,6 +1216,38 @@ export default function ContactsPage() {
           </button>
         )}
       </SectionHeader>
+
+      {/* Totals + what the two contact types actually mean. The Lead/Normal
+          distinction decides whether a contact is mailable in campaigns, which
+          was previously only discoverable by hovering the table badge. */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
+        <div className="flex items-baseline gap-2">
+          <span className="text-2xl font-semibold text-white tabular-nums">
+            {(totalContacts ?? allRows.length).toLocaleString()}
+          </span>
+          <span className="text-xs text-gray-400">contacts in total</span>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-lg font-semibold text-emerald-400 tabular-nums">
+            {allRows.filter((r) => r.contact_type !== "normal").length.toLocaleString()}
+          </span>
+          <span className="text-xs text-gray-400">leads loaded</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-400 md:ml-auto">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-emerald-600 bg-emerald-900/30 text-emerald-300 font-medium">
+              Lead
+            </span>
+            mailable — included in lead-generation campaigns
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-gray-600 bg-gray-800 text-gray-400 font-medium">
+              Normal
+            </span>
+            CRM only — never bulk-emailed
+          </span>
+        </div>
+      </div>
 
       {/* banner */}
       {banner && (
