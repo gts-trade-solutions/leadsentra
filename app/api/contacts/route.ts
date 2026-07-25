@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { isEmailShape } from "@/lib/suppressions";
+import { cleanPhone, cleanUrl } from "@/lib/validate";
 import { accessibleCompanyFilter } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,18 @@ export async function POST(req: Request) {
   const emailIn = body.email ? String(body.email).trim().toLowerCase() : null;
   if (emailIn && !isEmailShape(emailIn)) {
     return NextResponse.json({ error: "Invalid email format" }, { status: 400 });
+  }
+
+  // Phone and social URLs: placeholders ("not provided", "n/a", …) are
+  // silently stored as NULL; genuinely malformed values are rejected so the
+  // form can surface the typo. See lib/validate.ts.
+  const phone = cleanPhone(body.phone);
+  const linkedin = cleanUrl(body.linkedin_url, "linkedin", "LinkedIn URL");
+  const facebook = cleanUrl(body.facebook_url, "facebook", "Facebook URL");
+  const instagram = cleanUrl(body.instagram_url, "instagram", "Instagram URL");
+  const invalid = [phone, linkedin, facebook, instagram].find((r) => r.error);
+  if (invalid) {
+    return NextResponse.json({ error: invalid.error }, { status: 400 });
   }
 
   // Lead vs normal. Only 'lead' contacts are pulled into lead-generation
@@ -47,10 +60,10 @@ export async function POST(req: Request) {
       body.contact_name || null,
       emailIn,
       body.title || null,
-      body.phone || null,
-      body.linkedin_url || null,
-      body.facebook_url || null,
-      body.instagram_url || null,
+      phone.value,
+      linkedin.value,
+      facebook.value,
+      instagram.value,
       body.department || null,
       body.location || null,
       body.notes || null,

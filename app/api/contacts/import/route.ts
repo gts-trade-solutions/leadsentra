@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { isEmailShape } from "@/lib/suppressions";
+import { cleanPhone, cleanUrl } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -146,6 +147,21 @@ export async function POST(req: Request) {
         continue;
       }
 
+      // Phone and social URLs: placeholder junk ("not provided", "n/a", "-",
+      // …) silently becomes NULL — lead lists are full of it and it used to
+      // be stored verbatim, then rendered as a clickable "URL". Malformed
+      // real-looking values also clear to NULL but surface a warning so the
+      // operator knows the cell was dropped; the row itself still imports.
+      const cleaned = {
+        phone: cleanPhone(row.phone),
+        linkedin_url: cleanUrl(row.linkedin_url, "linkedin", "LinkedIn URL"),
+        facebook_url: cleanUrl(row.facebook_url, "facebook", "Facebook URL"),
+        instagram_url: cleanUrl(row.instagram_url, "instagram", "Instagram URL"),
+      };
+      for (const r of Object.values(cleaned)) {
+        if (r.error) errors.push({ row: i + 2, error: `${r.error} — field left empty` });
+      }
+
       const resolvedCompanyId = resolveCompanyId(row.company_id ?? null);
 
       // Bulk imports are lead lists, so rows default to 'lead' (mailable).
@@ -193,10 +209,10 @@ export async function POST(req: Request) {
             row.contact_name ?? null,
             email,
             row.title ?? null,
-            row.phone ?? null,
-            row.linkedin_url ?? null,
-            row.facebook_url ?? null,
-            row.instagram_url ?? null,
+            cleaned.phone.value,
+            cleaned.linkedin_url.value,
+            cleaned.facebook_url.value,
+            cleaned.instagram_url.value,
             row.department ?? null,
             row.location ?? null,
             row.notes ?? null,

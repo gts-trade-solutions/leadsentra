@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { cleanPhone, cleanUrl, type CleanResult, type UrlPlatform } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,11 +44,29 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     facebook_url: "facebook_url",
     instagram_url: "instagram_url",
   };
+  // Phone / social URL fields go through the shared cleaner: placeholder
+  // junk ("not provided", "n/a", …) saves as NULL, malformed values 400.
+  const cleaners: Record<string, (v: any) => CleanResult> = {
+    phone: (v) => cleanPhone(v),
+    linkedin_url: (v) => cleanUrl(v, "linkedin" as UrlPlatform, "LinkedIn URL"),
+    facebook_url: (v) => cleanUrl(v, "facebook" as UrlPlatform, "Facebook URL"),
+    instagram_url: (v) => cleanUrl(v, "instagram" as UrlPlatform, "Instagram URL"),
+  };
+
   const sets: string[] = [];
   const vals: any[] = [];
   for (const [key, col] of Object.entries(map)) {
     if (key in body) {
       const v = typeof body[key] === "string" ? body[key].trim() : body[key];
+      if (cleaners[key]) {
+        const cleaned = cleaners[key](v);
+        if (cleaned.error) {
+          return NextResponse.json({ error: cleaned.error }, { status: 400 });
+        }
+        sets.push(`${col} = ?`);
+        vals.push(cleaned.value);
+        continue;
+      }
       sets.push(`${col} = ?`);
       vals.push(v === "" ? null : v);
     }

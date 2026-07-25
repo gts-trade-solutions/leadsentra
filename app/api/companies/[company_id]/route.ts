@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { cleanDepartments } from "@/lib/departments";
+import { cleanPhone, cleanUrl, type CleanResult } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,9 +49,29 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
     phone_main: "phone_main",
   };
 
+  // Phone / URL fields go through the shared cleaner: placeholder junk
+  // ("not provided", "n/a", …) saves as NULL, malformed values 400.
+  const cleaners: Record<string, (v: any) => CleanResult> = {
+    website: (v) => cleanUrl(v, undefined, "Website URL"),
+    linkedin: (v) => cleanUrl(v, "linkedin", "LinkedIn URL"),
+    facebook_url: (v) => cleanUrl(v, "facebook", "Facebook URL"),
+    instagram_url: (v) => cleanUrl(v, "instagram", "Instagram URL"),
+    phone: (v) => cleanPhone(v),
+    phone_main: (v) => cleanPhone(v),
+  };
+
   for (const [key, col] of Object.entries(map)) {
     if (key in body) {
       const v = typeof body[key] === "string" ? body[key].trim() : body[key];
+      if (cleaners[key]) {
+        const cleaned = cleaners[key](v);
+        if (cleaned.error) {
+          return NextResponse.json({ error: cleaned.error }, { status: 400 });
+        }
+        sets.push(`${col} = ?`);
+        vals.push(cleaned.value);
+        continue;
+      }
       sets.push(`${col} = ?`);
       vals.push(v === "" ? null : v);
     }

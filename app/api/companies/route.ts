@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { cleanDepartments } from "@/lib/departments";
+import { cleanPhone, cleanUrl } from "@/lib/validate";
 import { getApprovedCompanyIds } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,18 @@ export async function POST(req: NextRequest) {
 
   if (!name) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
+  }
+
+  // Phone and URL fields go through the shared cleaner: placeholder junk
+  // ("not provided", "n/a", …) saves as NULL, malformed values are rejected.
+  const phoneMain = cleanPhone(body.phone_main);
+  const website = cleanUrl(body.website, undefined, "Website URL");
+  const linkedin = cleanUrl(body.linkedin, "linkedin", "LinkedIn URL");
+  const facebook = cleanUrl(body.facebook_url, "facebook", "Facebook URL");
+  const instagram = cleanUrl(body.instagram_url, "instagram", "Instagram URL");
+  const invalid = [phoneMain, website, linkedin, facebook, instagram].find((r) => r.error);
+  if (invalid) {
+    return NextResponse.json({ error: invalid.error }, { status: 400 });
   }
 
   const company_id = code || randomUUID();
@@ -76,13 +89,13 @@ export async function POST(req: NextRequest) {
       normStr(body.type),
       normStr(body.segment),
       normStr(body.size),
-      normStr(body.website),
-      normStr(body.linkedin),
-      normStr(body.facebook_url),
-      normStr(body.instagram_url),
+      website.value,
+      linkedin.value,
+      facebook.value,
+      instagram.value,
       normStr(body.country),
       normStr(body.city_regency),
-      normStr(body.phone_main),
+      phoneMain.value,
       Object.keys(meta).length ? JSON.stringify(meta) : null,
     ]
   );
