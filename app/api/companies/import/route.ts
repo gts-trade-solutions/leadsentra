@@ -258,6 +258,22 @@ export async function POST(req: Request) {
       });
     }
 
+    // Register any segment value the sheet introduced. The Companies filter and
+    // the edit form read their dropdown from company_segments, so an imported
+    // segment that isn't listed there is invisible in the UI even though it is
+    // stored on the row. Values over the column's 64 chars are skipped.
+    const newSegments = new Set<string>();
+    for (const p of pending) {
+      const seg = String(p.params[4] ?? "").trim();
+      if (seg && seg.length <= 64) newSegments.add(seg);
+    }
+    for (const seg of Array.from(newSegments)) {
+      await conn.execute(
+        "INSERT IGNORE INTO company_segments (name, created_by) VALUES (?, ?)",
+        [seg, session.id]
+      );
+    }
+
     // Retry a failed batch row-by-row so the offending row can still be named
     // (a multi-row INSERT is atomic, so nothing from the batch was written).
     const insertOne = async (p: PendingRow) => {

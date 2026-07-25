@@ -1482,6 +1482,16 @@ export default function CompaniesPage() {
                     className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
                   >
                     <option value="">—</option>
+                    {/* A segment that arrived by import may not be registered in
+                        company_segments yet. Without an option to match it the
+                        select renders blank and silently clears the value on
+                        save, so surface the stored value as its own option. */}
+                    {editCompanyForm.segment &&
+                      !segmentOptions.includes(editCompanyForm.segment) && (
+                        <option value={editCompanyForm.segment}>
+                          {editCompanyForm.segment} (not in list)
+                        </option>
+                      )}
                     {segmentOptions.map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
