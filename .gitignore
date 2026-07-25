@@ -19,6 +19,11 @@
 .DS_Store
 *.pem
 
+# user uploads — live customer files, backed up outside git. Keeping them
+# tracked means a stray `git add -A` on the server sweeps them into a commit,
+# and a reset/checkout can then delete them off disk.
+/public/uploads/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
