@@ -8,13 +8,26 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import mysql from "mysql2/promise";
 
-try {
-  const text = readFileSync(resolve(process.cwd(), ".env.local"), "utf8");
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-} catch {}
+// Load whichever env file this checkout uses. Dev machines keep credentials in
+// .env.local; the deployed server uses .env (that's what `next build` reports
+// as its environment). Earlier entries win, and anything already exported in
+// the shell beats both.
+for (const envFile of [".env.local", ".env"]) {
+  try {
+    const text = readFileSync(resolve(process.cwd(), envFile), "utf8");
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+  } catch {}
+}
+
+if (!process.env.MYSQL_USER) {
+  console.error(
+    "No MYSQL_USER found. Run from the repo root, where .env.local or .env lives."
+  );
+  process.exit(1);
+}
 
 const path = process.argv[2];
 if (!path) {
