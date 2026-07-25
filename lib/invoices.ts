@@ -24,8 +24,10 @@ export type InvoiceItem = InvoiceItemInput & {
 export type InvoiceTotals = {
   subtotal: number;
   discount: number;
-  tax_rate: number;
-  tax_amount: number;
+  tax_rate: number; // GST %
+  tax_amount: number; // GST amount
+  igst_rate: number; // IGST %
+  igst_amount: number; // IGST amount
   total: number;
 };
 
@@ -90,21 +92,26 @@ export function normalizeItems(raw: unknown): InvoiceItem[] {
 }
 
 /**
- * Compute invoice totals. Tax is applied to (subtotal - discount).
- * `taxRate` is a percentage (e.g. 18 = 18%).
+ * Compute invoice totals. GST and IGST are independent legs, each applied to
+ * (subtotal - discount); both rates are percentages (e.g. 18 = 18%). A domestic
+ * intra-state invoice sets GST only, an inter-state one sets IGST only, and
+ * leaving either at 0 simply omits that line from the invoice.
  */
 export function computeTotals(
   items: InvoiceItem[],
   discount: number,
-  taxRate: number
+  taxRate: number,
+  igstRate = 0
 ): InvoiceTotals {
   const subtotal = money(items.reduce((s, it) => s + it.amount, 0));
   const disc = money(Math.min(Math.max(0, discount), subtotal));
   const tax_rate = Math.max(0, num(taxRate, 0));
+  const igst_rate = Math.max(0, num(igstRate, 0));
   const taxable = Math.max(0, subtotal - disc);
   const tax_amount = money((taxable * tax_rate) / 100);
-  const total = money(taxable + tax_amount);
-  return { subtotal, discount: disc, tax_rate, tax_amount, total };
+  const igst_amount = money((taxable * igst_rate) / 100);
+  const total = money(taxable + tax_amount + igst_amount);
+  return { subtotal, discount: disc, tax_rate, tax_amount, igst_rate, igst_amount, total };
 }
 
 /**

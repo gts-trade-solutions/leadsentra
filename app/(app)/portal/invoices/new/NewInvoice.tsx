@@ -48,11 +48,15 @@ export default function NewInvoice() {
   const [customer, setCustomer] = useState({ ...emptyCustomer });
 
   // Manual-only state
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [subject, setSubject] = useState("");
   const [currency, setCurrency] = useState("INR");
   const [issueDate, setIssueDate] = useState(todayStr());
   const [validUntil, setValidUntil] = useState("");
   const [discount, setDiscount] = useState("0");
   const [taxRate, setTaxRate] = useState("18");
+  const [igstRate, setIgstRate] = useState("0");
+  const [bank, setBank] = useState({ name: "", account: "", branch: "", ifsc: "" });
   const [ref, setRef] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [deliveryTerms, setDeliveryTerms] = useState("");
@@ -90,6 +94,27 @@ export default function NewInvoice() {
         setContacts(list);
       } catch {
         setContacts([]);
+      }
+    })();
+  }, []);
+
+  // Pre-fill the bank block from the saved invoice settings; it stays editable
+  // so a one-off invoice can be issued against a different account.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/invoices/settings", { cache: "no-store", credentials: "same-origin" });
+        const json = await res.json().catch(() => ({}));
+        const s = json?.settings;
+        if (!s) return;
+        setBank({
+          name: s.bank_name || "",
+          account: s.bank_account || "",
+          branch: s.bank_branch || "",
+          ifsc: s.bank_ifsc || "",
+        });
+      } catch {
+        /* settings are optional — the fields just stay blank */
       }
     })();
   }, []);
@@ -145,8 +170,11 @@ export default function NewInvoice() {
         unit_price: num(it.unit_price, 0),
       }))
     );
-    return { ...computeTotals(normalized, num(discount, 0), num(taxRate, 0)), count: normalized.length };
-  }, [items, discount, taxRate]);
+    return {
+      ...computeTotals(normalized, num(discount, 0), num(taxRate, 0), num(igstRate, 0)),
+      count: normalized.length,
+    };
+  }, [items, discount, taxRate, igstRate]);
 
   function updateItem(idx: number, patch: Partial<ItemRow>) {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -198,6 +226,8 @@ export default function NewInvoice() {
 
   function buildManualPayload() {
     return {
+      invoice_number: invoiceNumber.trim() || null,
+      subject: subject.trim() || null,
       customer_contact_id: customer.contact_id || null,
       customer_company_id: customer.company_id || null,
       customer_name: customer.name || null,
@@ -210,9 +240,14 @@ export default function NewInvoice() {
       valid_until: validUntil || null,
       discount: num(discount, 0),
       tax_rate: num(taxRate, 0),
+      igst_rate: num(igstRate, 0),
       ref: ref || null,
       payment_terms: paymentTerms || null,
       delivery_terms: deliveryTerms || null,
+      bank_name: bank.name || null,
+      bank_account: bank.account || null,
+      bank_branch: bank.branch || null,
+      bank_ifsc: bank.ifsc || null,
       notes: notes || null,
       terms: terms || null,
       items: items.map((it) => ({
@@ -242,7 +277,7 @@ export default function NewInvoice() {
         body: JSON.stringify(buildManualPayload()),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error || "Could not save invoice");
+      if (!res.ok) throw new Error(json?.error || "Could not save proforma invoice");
       return json;
     }
     // upload mode
@@ -269,7 +304,7 @@ export default function NewInvoice() {
     fd.append("notes", notes || "");
     const res = await fetch("/api/invoices/upload", { method: "POST", credentials: "same-origin", body: fd });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json?.error || "Could not upload invoice");
+    if (!res.ok) throw new Error(json?.error || "Could not upload proforma invoice");
     return json;
   }
 
@@ -316,7 +351,7 @@ export default function NewInvoice() {
     if (thenSend && !customer.email) {
       toast({
         title: "Customer email required",
-        description: "Add the customer's email to send the invoice.",
+        description: "Add the customer's email to send the proforma invoice.",
         variant: "destructive",
       });
       return;
@@ -327,7 +362,7 @@ export default function NewInvoice() {
       if (!created) return;
 
       if (!thenSend) {
-        toast({ title: "Draft saved", description: `Invoice ${created.invoice_number} created.` });
+        toast({ title: "Draft saved", description: `Proforma Invoice ${created.invoice_number} created.` });
         router.push("/portal/invoices");
         return;
       }
@@ -345,7 +380,7 @@ export default function NewInvoice() {
           variant: "destructive",
         });
       } else {
-        toast({ title: "Invoice sent", description: `Emailed to ${sendJson.to}` });
+        toast({ title: "Proforma Invoice sent", description: `Emailed to ${sendJson.to}` });
       }
       router.push("/portal/invoices");
     } catch (e: any) {
@@ -366,6 +401,71 @@ export default function NewInvoice() {
     >
       <Icon className="w-4 h-4" /> {label}
     </button>
+  );
+
+  // Proforma-invoice header block (manual mode): number + subject line.
+  const InvoiceMetaCard = (
+    <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+      <h2 className="text-sm font-semibold text-white mb-4">Proforma invoice details</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>Proforma Invoice No</label>
+          <input
+            className={inputCls}
+            value={invoiceNumber}
+            onChange={(e) => setInvoiceNumber(e.target.value)}
+            placeholder="Leave blank to auto-number (e.g. RIPL/PI/2026/09)"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Blank uses the next number in your series; a typed number is used as-is and must be unique.
+          </p>
+        </div>
+        <div>
+          <label className={labelCls}>Subject (Sub:)</label>
+          <input
+            className={inputCls}
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Supply of LBI route survey for 120 MT transformer"
+          />
+          <p className="text-xs text-gray-500 mt-1">Printed as a “Sub :” line above the item table.</p>
+        </div>
+      </div>
+    </section>
+  );
+
+  // Bank details for this proforma invoice (manual mode), pre-filled from settings.
+  const BankCard = (
+    <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">Bank details</h2>
+        <a href="/portal/invoices/settings" className="text-xs text-gray-400 hover:text-emerald-400 underline">
+          Edit defaults →
+        </a>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>Bank name</label>
+          <input className={inputCls} value={bank.name} onChange={(e) => setBank({ ...bank, name: e.target.value })} placeholder="HDFC Bank Ltd" />
+        </div>
+        <div>
+          <label className={labelCls}>Account number</label>
+          <input className={inputCls} value={bank.account} onChange={(e) => setBank({ ...bank, account: e.target.value })} placeholder="50200012345678" />
+        </div>
+        <div>
+          <label className={labelCls}>Branch</label>
+          <input className={inputCls} value={bank.branch} onChange={(e) => setBank({ ...bank, branch: e.target.value })} placeholder="Guindy, Chennai" />
+        </div>
+        <div>
+          <label className={labelCls}>IFSC code</label>
+          <input className={inputCls} value={bank.ifsc} onChange={(e) => setBank({ ...bank, ifsc: e.target.value })} placeholder="HDFC0001234" />
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 mt-3">
+        These print in the BANK DETAILS band on the proforma invoice and in the email body. Blank fields fall back to
+        your saved invoice settings.
+      </p>
+    </section>
   );
 
   // Shared customer block (both modes).
@@ -447,10 +547,13 @@ export default function NewInvoice() {
     <AuthGuard>
       <div className="p-6 max-w-5xl mx-auto">
         <button onClick={() => router.push("/portal/invoices")} className="flex items-center gap-2 text-sm text-gray-400 hover:text-white mb-4">
-          <ArrowLeft className="w-4 h-4" /> Back to invoices
+          <ArrowLeft className="w-4 h-4" /> Back to proforma invoices
         </button>
 
-        <SectionHeader title="New Proforma Invoice" description="Build one from line items, or upload a ready-made PDF.">
+        <SectionHeader
+          title="New Proforma Invoice"
+          description="Build one from line items, or upload a ready-made proforma invoice PDF."
+        >
           {null}
         </SectionHeader>
 
@@ -466,6 +569,7 @@ export default function NewInvoice() {
         </div>
 
         <div className="space-y-6">
+          {mode === "manual" && InvoiceMetaCard}
           {CustomerCard}
 
           {mode === "manual" ? (
@@ -559,8 +663,18 @@ export default function NewInvoice() {
                       <input className={inputCls} value={discount} onChange={(e) => setDiscount(e.target.value)} inputMode="decimal" />
                     </div>
                     <div>
-                      <label className={labelCls}>GST / Tax rate (%)</label>
-                      <input className={inputCls} value={taxRate} onChange={(e) => setTaxRate(e.target.value)} inputMode="decimal" />
+                      <label className={labelCls}>GST (%)</label>
+                      <input className={inputCls} value={taxRate} onChange={(e) => setTaxRate(e.target.value)} inputMode="decimal" placeholder="18" />
+                    </div>
+                    <div>
+                      <label className={labelCls}>IGST (%)</label>
+                      <input className={inputCls} value={igstRate} onChange={(e) => setIgstRate(e.target.value)} inputMode="decimal" placeholder="0" />
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-xs text-gray-500">
+                        Set GST for intra-state or IGST for inter-state supply — leave the other at 0. Both are charged
+                        on (subtotal − discount) and print as separate lines.
+                      </p>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 gap-3">
@@ -606,17 +720,25 @@ export default function NewInvoice() {
                         <span className="text-gray-200 tabular-nums">{formatMoney(totals.tax_amount, currency)}</span>
                       </div>
                     )}
+                    {totals.igst_rate > 0 && (
+                      <div className="flex justify-between text-gray-400">
+                        <span>IGST ({totals.igst_rate}%)</span>
+                        <span className="text-gray-200 tabular-nums">{formatMoney(totals.igst_amount, currency)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between pt-2 border-t border-gray-800 text-base font-semibold">
                       <span className="text-white">Total</span>
                       <span className="text-emerald-400 tabular-nums">{formatMoney(totals.total, currency)}</span>
                     </div>
                   </div>
                   <p className="text-xs text-gray-500 mt-4">
-                    Bank details, PAN, declaration, logo &amp; signature come from your{" "}
+                    PAN, declaration, logo &amp; signature come from your{" "}
                     <a href="/portal/invoices/settings" className="text-emerald-400 underline">invoice settings</a>.
                   </p>
                 </div>
               </section>
+
+              {BankCard}
             </>
           ) : (
             /* Upload mode */

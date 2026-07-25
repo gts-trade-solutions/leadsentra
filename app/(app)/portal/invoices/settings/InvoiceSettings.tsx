@@ -102,10 +102,10 @@ export default function InvoiceSettings() {
           onClick={() => router.push("/portal/invoices")}
           className="flex items-center gap-2 text-sm text-gray-400 hover:text-white mb-4"
         >
-          <ArrowLeft className="w-4 h-4" /> Back to invoices
+          <ArrowLeft className="w-4 h-4" /> Back to proforma invoices
         </button>
         <SectionHeader
-          title="Invoice Settings"
+          title="Proforma Invoice Settings"
           description="These details pre-fill and appear on every proforma invoice you generate."
         >
           {null}
@@ -123,7 +123,7 @@ export default function InvoiceSettings() {
                   <input className={inputCls} value={form.seller_company} onChange={(e) => set("seller_company", e.target.value)} />
                 </div>
                 <div>
-                  <label className={labelCls}>Invoice number prefix</label>
+                  <label className={labelCls}>Proforma Invoice number prefix</label>
                   <input className={inputCls} value={form.invoice_prefix} onChange={(e) => set("invoice_prefix", e.target.value)} placeholder="e.g. RIPL/PI  →  RIPL/PI/2026/09" />
                 </div>
                 <div className="md:col-span-2">

@@ -35,17 +35,21 @@ export async function POST(req: Request) {
   const items = normalizeItems(body.items);
   const discount = Math.max(0, num(body.discount, 0));
   const taxRate = Math.max(0, num(body.tax_rate, 0));
-  const totals = computeTotals(items, discount, taxRate);
+  const igstRate = Math.max(0, num(body.igst_rate, 0));
+  const totals = computeTotals(items, discount, taxRate, igstRate);
 
   const issueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.issue_date || ""))
     ? String(body.issue_date)
     : new Date().toISOString().slice(0, 10);
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
   const prefix = (settings?.invoice_prefix || "").trim().replace(/\/+$/, "");
-  const previewNumber = prefix ? `${prefix}/${year}/##` : `PI-${year}-####`;
+  // A typed-in invoice no is previewed as-is; blank shows the auto-number shape.
+  const previewNumber =
+    s(body.invoice_number, 64) || (prefix ? `${prefix}/${year}/##` : `PI-${year}-####`);
 
   const data: InvoicePdfData = {
     invoice_number: previewNumber,
+    subject: s(body.subject, 512),
     status: "preview",
     issue_date: issueDate,
     valid_until: /^\d{4}-\d{2}-\d{2}$/.test(String(body.valid_until || "")) ? String(body.valid_until) : null,
@@ -87,6 +91,8 @@ export async function POST(req: Request) {
     discount: totals.discount,
     tax_rate: totals.tax_rate,
     tax_amount: totals.tax_amount,
+    igst_rate: totals.igst_rate,
+    igst_amount: totals.igst_amount,
     total: totals.total,
 
     notes: s(body.notes, 4000),

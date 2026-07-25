@@ -87,7 +87,9 @@ export async function createProformaInvoice(
 
   const discount = Math.max(0, num(body.discount, 0));
   const taxRate = Math.max(0, num(body.tax_rate, 0));
-  const totals = computeTotals(items, discount, taxRate);
+  const igstRate = Math.max(0, num(body.igst_rate, 0));
+  const totals = computeTotals(items, discount, taxRate, igstRate);
+  const subject = s(body.subject, 512);
 
   const issueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.issue_date || ""))
     ? String(body.issue_date)
@@ -102,42 +104,48 @@ export async function createProformaInvoice(
 
   const id = randomUUID();
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
+  // A typed-in invoice no wins over the auto sequence; blank keeps auto-numbering.
+  const manualNumber = s(body.invoice_number, 64);
 
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
-    const invoiceNumber = await nextInvoiceNumber(conn, userId, year, settings?.invoice_prefix);
+    const invoiceNumber =
+      manualNumber || (await nextInvoiceNumber(conn, userId, year, settings?.invoice_prefix));
 
     await conn.execute(
       `INSERT INTO proforma_invoices
-        (id, user_id, invoice_number, status, source,
+        (id, user_id, invoice_number, subject, status, source,
          customer_contact_id, customer_company_id, customer_name, customer_email,
          customer_company, customer_gstin, customer_address,
          seller_name, seller_email, seller_phone, seller_company, seller_gstin, seller_pan, seller_address,
          ref, payment_terms, delivery_terms,
          bank_name, bank_account, bank_branch, bank_ifsc,
          declaration, signatory_name, logo_path, signature_path,
-         issue_date, valid_until, currency, subtotal, discount, tax_rate, tax_amount, total,
+         issue_date, valid_until, currency, subtotal, discount,
+         tax_rate, tax_amount, igst_rate, igst_amount, total,
          notes, terms)
-       VALUES (?, ?, ?, 'draft', 'generated',
+       VALUES (?, ?, ?, ?, 'draft', 'generated',
          ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?, ?, ?,
          ?, ?, ?, ?,
-         ?, ?, ?, ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?)`,
       [
-        id, userId, invoiceNumber,
+        id, userId, invoiceNumber, subject,
         customer.contact_id, customer.company_id, customer.name, customer.email,
         customer.company, customer.gstin, customer.address,
         seller.name, seller.email, seller.phone, seller.company, seller.gstin, seller.pan, seller.address,
         ref, paymentTerms, deliveryTerms,
         bank.name, bank.account, bank.branch, bank.ifsc,
         declaration, signatoryName, logoPath, signaturePath,
-        issueDate, validUntil, currency, totals.subtotal, totals.discount, totals.tax_rate, totals.tax_amount, totals.total,
+        issueDate, validUntil, currency, totals.subtotal, totals.discount,
+        totals.tax_rate, totals.tax_amount, totals.igst_rate, totals.igst_amount, totals.total,
         notes, terms,
       ]
     );
@@ -153,8 +161,12 @@ export async function createProformaInvoice(
 
     await conn.commit();
     return { id, invoice_number: invoiceNumber };
-  } catch (e) {
+  } catch (e: any) {
     await conn.rollback();
+    // (user_id, invoice_number) is unique — a typed-in number may already exist.
+    if (e?.code === "ER_DUP_ENTRY" && manualNumber) {
+      throw new HttpError(400, `Invoice no "${manualNumber}" already exists. Use a different number.`);
+    }
     throw e;
   } finally {
     conn.release();

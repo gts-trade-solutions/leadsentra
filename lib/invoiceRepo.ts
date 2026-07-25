@@ -15,6 +15,7 @@ export type InvoiceRecord = {
   id: string;
   user_id: string;
   invoice_number: string;
+  subject: string | null;
   status: string;
   source: string; // generated | upload
   pdf_path: string | null;
@@ -50,6 +51,8 @@ export type InvoiceRecord = {
   discount: number;
   tax_rate: number;
   tax_amount: number;
+  igst_rate: number;
+  igst_amount: number;
   total: number;
   notes: string | null;
   terms: string | null;
@@ -87,6 +90,7 @@ function mapInvoice(row: any): InvoiceRecord {
     id: row.id,
     user_id: row.user_id,
     invoice_number: row.invoice_number,
+    subject: row.subject ?? null,
     status: row.status,
     source: row.source || "generated",
     pdf_path: row.pdf_path,
@@ -122,6 +126,8 @@ function mapInvoice(row: any): InvoiceRecord {
     discount: num(row.discount),
     tax_rate: num(row.tax_rate),
     tax_amount: num(row.tax_amount),
+    igst_rate: num(row.igst_rate),
+    igst_amount: num(row.igst_amount),
     total: num(row.total),
     notes: row.notes,
     terms: row.terms,
@@ -175,6 +181,7 @@ export async function loadInvoiceAssets(invoice: InvoiceRecord): Promise<Invoice
 export function toPdfData(invoice: InvoiceRecord, items: InvoiceItemRecord[]): InvoicePdfData {
   return {
     invoice_number: invoice.invoice_number,
+    subject: invoice.subject,
     status: invoice.status,
     issue_date: invoice.issue_date,
     valid_until: invoice.valid_until,
@@ -212,6 +219,8 @@ export function toPdfData(invoice: InvoiceRecord, items: InvoiceItemRecord[]): I
     discount: invoice.discount,
     tax_rate: invoice.tax_rate,
     tax_amount: invoice.tax_amount,
+    igst_rate: invoice.igst_rate,
+    igst_amount: invoice.igst_amount,
     total: invoice.total,
     notes: invoice.notes,
     terms: invoice.terms,

@@ -55,10 +55,34 @@ export function buildInvoiceEmail(
       ? `<tr><td style="padding:4px 10px;text-align:right;color:#64748b;">Discount</td><td style="padding:4px 10px;text-align:right;color:#0f172a;">- ${esc(formatMoney(invoice.discount, cur))}</td></tr>`
       : "",
     invoice.tax_rate > 0
-      ? `<tr><td style="padding:4px 10px;text-align:right;color:#64748b;">Tax (${esc(invoice.tax_rate)}%)</td><td style="padding:4px 10px;text-align:right;color:#0f172a;">${esc(formatMoney(invoice.tax_amount, cur))}</td></tr>`
+      ? `<tr><td style="padding:4px 10px;text-align:right;color:#64748b;">GST (${esc(invoice.tax_rate)}%)</td><td style="padding:4px 10px;text-align:right;color:#0f172a;">${esc(formatMoney(invoice.tax_amount, cur))}</td></tr>`
+      : "",
+    invoice.igst_rate > 0
+      ? `<tr><td style="padding:4px 10px;text-align:right;color:#64748b;">IGST (${esc(invoice.igst_rate)}%)</td><td style="padding:4px 10px;text-align:right;color:#0f172a;">${esc(formatMoney(invoice.igst_amount, cur))}</td></tr>`
       : "",
     `<tr><td style="padding:8px 10px;text-align:right;color:#0f172a;font-weight:700;border-top:2px solid #10b981;">Total</td><td style="padding:8px 10px;text-align:right;color:#059669;font-weight:700;border-top:2px solid #10b981;">${esc(formatMoney(invoice.total, cur))}</td></tr>`,
   ].join("");
+
+  // Bank details — the same block the PDF carries, so the customer can pay
+  // straight from the email without opening the attachment.
+  const bank: Array<[string, string]> = [];
+  if (invoice.bank_name) bank.push(["Bank", invoice.bank_name]);
+  if (invoice.bank_account) bank.push(["Account No", invoice.bank_account]);
+  if (invoice.bank_branch) bank.push(["Branch", invoice.bank_branch]);
+  if (invoice.bank_ifsc) bank.push(["IFSC Code", invoice.bank_ifsc]);
+  const bankRows = bank.length
+    ? `<tr><td style="padding:16px 28px 0 28px;">
+        <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.06em;">Bank Details</div>
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:4px;font-size:13px;">
+          ${bank
+            .map(
+              ([k, v]) =>
+                `<tr><td style="padding:2px 12px 2px 0;color:#64748b;">${esc(k)}</td><td style="padding:2px 0;color:#0f172a;">${esc(v)}</td></tr>`
+            )
+            .join("")}
+        </table>
+      </td></tr>`
+    : "";
 
   const html = `<!doctype html>
 <html>
@@ -90,6 +114,14 @@ export function buildInvoiceEmail(
             ${invoice.customer_gstin ? `<div style="color:#64748b;font-size:12px;">GSTIN: ${esc(invoice.customer_gstin)}</div>` : ""}
           </td></tr>
 
+          ${
+            invoice.subject
+              ? `<tr><td style="padding:12px 28px 0 28px;">
+            <div style="color:#0f172a;font-size:13px;"><span style="font-weight:700;">Sub:</span> ${nl2br(invoice.subject)}</div>
+          </td></tr>`
+              : ""
+          }
+
           <tr><td style="padding:12px 28px 0 28px;color:#475569;font-size:14px;line-height:1.6;">
             <p style="margin:8px 0 16px 0;">${nl2br(intro)}</p>
           </td></tr>
@@ -116,6 +148,8 @@ export function buildInvoiceEmail(
           </td></tr>`
               : `<tr><td style="padding:8px 28px;color:#475569;font-size:13px;">Please see the attached PDF for the full proforma invoice.</td></tr>`
           }
+
+          ${bankRows}
 
           ${
             invoice.notes
@@ -145,6 +179,7 @@ export function buildInvoiceEmail(
     `Date: ${invoice.issue_date}${invoice.valid_until ? `  Valid until: ${invoice.valid_until}` : ""}`,
     "",
     `Bill To: ${invoice.customer_company || invoice.customer_name || ""}`,
+    invoice.subject ? `Sub: ${invoice.subject}` : "",
     "",
     intro,
     "",
@@ -155,9 +190,11 @@ export function buildInvoiceEmail(
     "",
     `Subtotal: ${formatMoney(invoice.subtotal, cur)}`,
     invoice.discount > 0 ? `Discount: -${formatMoney(invoice.discount, cur)}` : "",
-    invoice.tax_rate > 0 ? `Tax (${invoice.tax_rate}%): ${formatMoney(invoice.tax_amount, cur)}` : "",
+    invoice.tax_rate > 0 ? `GST (${invoice.tax_rate}%): ${formatMoney(invoice.tax_amount, cur)}` : "",
+    invoice.igst_rate > 0 ? `IGST (${invoice.igst_rate}%): ${formatMoney(invoice.igst_amount, cur)}` : "",
     `Total: ${formatMoney(invoice.total, cur)}`,
     "",
+    ...(bank.length ? ["Bank Details:", ...bank.map(([k, v]) => `  ${k}: ${v}`), ""] : []),
     invoice.notes ? `Notes: ${invoice.notes}` : "",
     invoice.terms ? `Terms: ${invoice.terms}` : "",
     "",

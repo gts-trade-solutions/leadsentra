@@ -53,12 +53,12 @@ export default function InvoicesPage() {
     if (!row.customer_email) {
       toast({
         title: "No customer email",
-        description: "Open the invoice and add a customer email before sending.",
+        description: "Open the proforma invoice and add a customer email before sending.",
         variant: "destructive",
       });
       return;
     }
-    if (!confirm(`Send invoice ${row.invoice_number} to ${row.customer_email}?`)) return;
+    if (!confirm(`Send proforma invoice ${row.invoice_number} to ${row.customer_email}?`)) return;
     setBusyId(row.id);
     try {
       const res = await fetch(`/api/invoices/${row.id}/send`, {
@@ -69,7 +69,7 @@ export default function InvoicesPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Send failed");
-      toast({ title: "Invoice sent", description: `Emailed to ${json.to}` });
+      toast({ title: "Proforma Invoice sent", description: `Emailed to ${json.to}` });
       load();
     } catch (e: any) {
       toast({ title: "Could not send", description: e?.message || String(e), variant: "destructive" });
@@ -79,7 +79,7 @@ export default function InvoicesPage() {
   }
 
   async function markAsOrder(row: InvoiceRow) {
-    if (!confirm(`Mark invoice ${row.invoice_number} as an order confirmation? It will be added to Orders.`)) return;
+    if (!confirm(`Mark proforma invoice ${row.invoice_number} as an order confirmation? It will be added to Orders.`)) return;
     setBusyId(row.id);
     try {
       const res = await fetch(`/api/invoices/${row.id}/order`, { method: "POST", credentials: "same-origin" });
@@ -98,7 +98,7 @@ export default function InvoicesPage() {
   }
 
   async function remove(row: InvoiceRow) {
-    if (!confirm(`Delete invoice ${row.invoice_number}? This cannot be undone.`)) return;
+    if (!confirm(`Delete proforma invoice ${row.invoice_number}? This cannot be undone.`)) return;
     setBusyId(row.id);
     try {
       const res = await fetch(`/api/invoices/${row.id}`, {
@@ -110,7 +110,7 @@ export default function InvoicesPage() {
         throw new Error(json?.error || "Delete failed");
       }
       setRows((prev) => prev.filter((r) => r.id !== row.id));
-      toast({ title: "Invoice deleted" });
+      toast({ title: "Proforma Invoice deleted" });
     } catch (e: any) {
       toast({ title: "Could not delete", description: e?.message || String(e), variant: "destructive" });
     } finally {
@@ -128,7 +128,7 @@ export default function InvoicesPage() {
           <button
             onClick={() => router.push("/portal/invoices/settings")}
             className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm font-medium transition-colors"
-            title="Invoice settings"
+            title="Proforma invoice settings"
           >
             <Settings className="w-4 h-4" /> Settings
           </button>
@@ -142,7 +142,7 @@ export default function InvoicesPage() {
             onClick={() => router.push("/portal/invoices/new")}
             className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors"
           >
-            <Plus className="w-4 h-4" /> New Invoice
+            <Plus className="w-4 h-4" /> New Proforma Invoice
           </button>
         </SectionHeader>
 
@@ -153,10 +153,10 @@ export default function InvoicesPage() {
         ) : rows.length === 0 ? (
           <EmptyState
             icon={FileText}
-            title="No invoices yet"
+            title="No proforma invoices yet"
             description="Create your first proforma invoice and email it to a customer with a PDF attached."
             primary={{
-              label: "New Invoice",
+              label: "New Proforma Invoice",
               onClick: () => router.push("/portal/invoices/new"),
             }}
           />
@@ -165,7 +165,7 @@ export default function InvoicesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-400 border-b border-gray-800">
-                  <th className="px-4 py-3 font-medium">Invoice #</th>
+                  <th className="px-4 py-3 font-medium">Proforma Invoice #</th>
                   <th className="px-4 py-3 font-medium">Customer</th>
                   <th className="px-4 py-3 font-medium text-right">Total</th>
                   <th className="px-4 py-3 font-medium">Date</th>

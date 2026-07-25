@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage } from "pdf-lib";
-import { money, amountInWords } from "./invoices";
+import { money, amountInWords, num } from "./invoices";
 
 /**
  * Server-side proforma-invoice PDF renderer (pdf-lib, pure JS) styled to match
@@ -23,6 +23,7 @@ export type InvoicePdfItem = {
 
 export type InvoicePdfData = {
   invoice_number: string;
+  subject?: string | null;
   status: string;
   issue_date: string; // YYYY-MM-DD
   valid_until?: string | null;
@@ -55,8 +56,10 @@ export type InvoicePdfData = {
 
   subtotal: number;
   discount: number;
-  tax_rate: number;
+  tax_rate: number; // GST %
   tax_amount: number;
+  igst_rate?: number | null; // IGST %
+  igst_amount?: number | null;
   total: number;
 
   notes?: string | null;
@@ -93,6 +96,11 @@ function pdfMoney(amount: number, code: string): string {
   const locale = c === "INR" ? "en-IN" : "en-US";
   const n = money(amount).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return n;
+}
+
+/** 18 -> "18", 18.5 -> "18.5" (DECIMAL rates arrive as 18.000). */
+function pct(rate: number): string {
+  return String(Number(num(rate).toFixed(3)));
 }
 
 /** YYYY-MM-DD -> "23-Jan-26". Falls back to the raw string if unparseable. */
@@ -288,6 +296,18 @@ export async function generateInvoicePdf(
   }
   y -= band2H;
 
+  // ---- Subject band (the "Sub:" line, like the offer letter) ----
+  if (data.subject && String(data.subject).trim()) {
+    const subLabel = "Sub : ";
+    const subLabelW = bold.widthOfTextAtSize(subLabel, 8.5);
+    const subLines = wrap(data.subject, font, 8.5, width - 12 - subLabelW);
+    const subH = subLines.length * 11 + 8;
+    box(left, y - subH, width, subH);
+    txt(subLabel, left + 6, y - 13, { size: 8.5, bold: true });
+    subLines.forEach((sl, i) => txt(sl, left + 6 + subLabelW, y - 13 - i * 11, { size: 8.5 }));
+    y -= subH;
+  }
+
   // ---- Items table ----
   const cSl = left;
   const cPart = left + 30;
@@ -336,8 +356,14 @@ export async function generateInvoicePdf(
     y -= rowH;
   });
 
-  // Pad the table to a minimum height, then the GST/total rows live inside it.
-  const minBodyBottom = tableTop - 120;
+  // Pad the table to a minimum height, then the tax/total rows live inside it.
+  // The pad has to clear however many totals rows this invoice actually needs
+  // (Sub Total + optional Discount/GST/IGST + Total), at 16pt each.
+  const igstRate = num(data.igst_rate);
+  const igstAmount = num(data.igst_amount);
+  const totalsRowCount =
+    2 + (data.discount > 0 ? 1 : 0) + (data.tax_rate > 0 ? 1 : 0) + (igstRate > 0 ? 1 : 0);
+  const minBodyBottom = tableTop - Math.max(120, totalsRowCount * 16 + 12);
   if (y > minBodyBottom) y = minBodyBottom;
 
   // vertical separators across the full body
@@ -352,7 +378,8 @@ export async function generateInvoicePdf(
   };
   totRow("Sub Total", pdfMoney(data.subtotal, data.currency));
   if (data.discount > 0) totRow("Discount", `- ${pdfMoney(data.discount, data.currency)}`);
-  if (data.tax_rate > 0) totRow(`GST ${data.tax_rate}%`, pdfMoney(data.tax_amount, data.currency));
+  if (data.tax_rate > 0) totRow(`GST ${pct(data.tax_rate)}%`, pdfMoney(data.tax_amount, data.currency));
+  if (igstRate > 0) totRow(`IGST ${pct(igstRate)}%`, pdfMoney(igstAmount, data.currency));
   totRow("Total", pdfMoney(data.total, data.currency), { bold: true });
 
   // close the items box
