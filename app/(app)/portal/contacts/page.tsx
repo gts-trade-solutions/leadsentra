@@ -9,6 +9,7 @@ import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
 import SelectAllCheckbox from "@/components/SelectAllCheckbox";
 import { externalUrl } from "@/lib/url";
+import { readUploadResponse } from "@/lib/uploadError";
 import PhoneInput from "@/components/PhoneInput";
 
 import {
@@ -1082,25 +1083,27 @@ export default function ContactsPage() {
                 body: fd,
                 credentials: "same-origin",
               });
-              const json = await res.json();
-              setUploadResult(json);
-              if (res.ok) {
+              const { ok, json, message } = await readUploadResponse(res, file.size);
+              if (ok) {
+                setUploadResult(json);
                 toast({
                   title: "Import complete",
                   description: `${json.inserted ?? 0} added · ${json.failed ?? 0} failed`,
                 });
                 await load();
               } else {
+                setUploadResult(json ?? { inserted: 0, errors: [{ row: -1, error: message }] });
                 toast({
                   variant: "destructive",
                   title: "Import failed",
-                  description: json?.error || "See errors below.",
+                  description: message,
                 });
               }
-            } catch {
+            } catch (err) {
+              const detail = err instanceof Error ? err.message : "Could not contact the server.";
               setUploadResult({
                 inserted: 0,
-                errors: [{ row: -1, error: "Upload failed" }],
+                errors: [{ row: -1, error: `Upload failed — ${detail}` }],
               });
             } finally {
               setUploading(false);

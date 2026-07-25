@@ -5,6 +5,7 @@ import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
+import { cleanPhone, cleanUrl } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -170,6 +171,21 @@ export async function POST(req: Request) {
   let failed = 0;
   const errors: RowError[] = [];
 
+  // Rows are validated/cleaned first (pure CPU, no DB), then written in
+  // multi-row batches. One INSERT per row costs a network round trip each, so
+  // a 10k-row sheet used to take a minute-plus and die on the proxy's read
+  // timeout; batching turns that into ~20 statements.
+  const INSERT_COLUMNS = `(company_id, user_id, company_name, industry, segment, size, website, linkedin,
+              facebook_url, instagram_url, country,
+              legal_name, trading_name, company_type, head_office_address, city_regency,
+              postal_code, phone_main, email_general, notes, company_profile,
+              financial_reports, forecast_value)`;
+  const TUPLE = `(${new Array(23).fill("?").join(", ")})`;
+  const BATCH_SIZE = 200;
+
+  type PendingRow = { rowNum: number; company_id: string; params: any[] };
+  const pending: PendingRow[] = [];
+
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -191,55 +207,83 @@ export async function POST(req: Request) {
         continue;
       }
 
+      // Phone and URL cells: placeholder junk ("not provided", "n/a", "-",
+      // …) silently becomes NULL; malformed real-looking values also clear
+      // to NULL with a warning — the row itself still imports.
+      const cleaned = {
+        website: cleanUrl(row.website, undefined, "Website URL"),
+        linkedin: cleanUrl(row.linkedin, "linkedin", "LinkedIn URL"),
+        facebook_url: cleanUrl(row.facebook_url, "facebook", "Facebook URL"),
+        instagram_url: cleanUrl(row.instagram_url, "instagram", "Instagram URL"),
+        phone_main: cleanPhone(row.phone_main),
+      };
+      for (const r of Object.values(cleaned)) {
+        if (r.error) errors.push({ row: i + 2, error: `${r.error} — field left empty` });
+      }
+
       const company_id = row.code || randomUUID();
       const forecastValue =
         row.forecast_value && !isNaN(Number(row.forecast_value))
           ? Number(row.forecast_value)
           : null;
 
+      pending.push({
+        rowNum: i + 2,
+        company_id,
+        params: [
+          company_id,
+          session.id,
+          name,
+          row.type ?? null,
+          row.segment ?? null,
+          row.size ?? null,
+          cleaned.website.value,
+          cleaned.linkedin.value,
+          cleaned.facebook_url.value,
+          cleaned.instagram_url.value,
+          row.country ?? null,
+          row.legal_name ?? null,
+          row.trading_name ?? null,
+          row.type ?? null,
+          row.head_office_address ?? null,
+          row.city_regency ?? null,
+          row.postal_code ?? null,
+          cleaned.phone_main.value,
+          row.email_general ?? null,
+          row.notes ?? null,
+          row.company_profile ?? null,
+          row.financial_reports ?? null,
+          forecastValue,
+        ],
+      });
+    }
+
+    // Retry a failed batch row-by-row so the offending row can still be named
+    // (a multi-row INSERT is atomic, so nothing from the batch was written).
+    const insertOne = async (p: PendingRow) => {
       try {
-        await conn.execute(
-          `INSERT INTO companies
-             (company_id, user_id, company_name, industry, segment, size, website, linkedin,
-              facebook_url, instagram_url, country,
-              legal_name, trading_name, company_type, head_office_address, city_regency,
-              postal_code, phone_main, email_general, notes, company_profile,
-              financial_reports, forecast_value)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            company_id,
-            session.id,
-            name,
-            row.type ?? null,
-            row.segment ?? null,
-            row.size ?? null,
-            row.website ?? null,
-            row.linkedin ?? null,
-            row.facebook_url ?? null,
-            row.instagram_url ?? null,
-            row.country ?? null,
-            row.legal_name ?? null,
-            row.trading_name ?? null,
-            row.type ?? null,
-            row.head_office_address ?? null,
-            row.city_regency ?? null,
-            row.postal_code ?? null,
-            row.phone_main ?? null,
-            row.email_general ?? null,
-            row.notes ?? null,
-            row.company_profile ?? null,
-            row.financial_reports ?? null,
-            forecastValue,
-          ]
-        );
+        await conn.execute(`INSERT INTO companies ${INSERT_COLUMNS} VALUES ${TUPLE}`, p.params);
         inserted++;
       } catch (e: any) {
         failed++;
         const msg =
           e?.code === "ER_DUP_ENTRY"
-            ? `Duplicate company_id "${company_id}"`
+            ? `Duplicate company_id "${p.company_id}"`
             : e?.message || "Insert failed";
-        errors.push({ row: i + 2, error: msg });
+        errors.push({ row: p.rowNum, error: msg });
+      }
+    };
+
+    for (let start = 0; start < pending.length; start += BATCH_SIZE) {
+      const chunk = pending.slice(start, start + BATCH_SIZE);
+      try {
+        await conn.query(
+          `INSERT INTO companies ${INSERT_COLUMNS} VALUES ${chunk.map(() => TUPLE).join(", ")}`,
+          chunk.flatMap((p) => p.params)
+        );
+        inserted += chunk.length;
+      } catch {
+        for (const p of chunk) await insertOne(p);
       }
     }
 
