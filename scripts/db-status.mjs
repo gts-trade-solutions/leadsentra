@@ -40,14 +40,19 @@ const EXPECTED = [
   ["orders", "2026-06-29_orders.sql"],
 ];
 
-// Columns added by later migrations to tables that already exist.
+// Columns added by later migrations to tables that already exist. These only
+// apply once the parent table is there, so a missing table hides them — re-run
+// this script after creating tables to catch the follow-on ALTERs.
 const EXPECTED_COLUMNS = [
   ["proforma_invoices", "subject", "2026-07-25_pi_subject_igst.sql"],
   ["proforma_invoices", "igst_rate", "2026-07-25_pi_subject_igst.sql"],
   ["proforma_invoices", "bank_name", "2026-06-24_proforma_invoices_v2.sql"],
+  ["mail_accounts", "label", "2026-07-18_mail_accounts_multi.sql"],
+  ["mail_accounts", "is_default", "2026-07-18_mail_accounts_multi.sql"],
   ["contacts", "contact_type", "2026-07-18_contact_type.sql"],
   ["companies", "facebook_url", "2026-07-18_company_socials.sql"],
   ["company_catalogues", "button_label", "2026-07-18_catalogue_button_label.sql"],
+  ["campaigns", "low_signal", "2026-07-18_campaign_low_signal.sql"],
 ];
 
 const conn = await mysql.createConnection({
