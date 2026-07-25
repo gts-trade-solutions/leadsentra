@@ -11,6 +11,7 @@ import SelectAllCheckbox from "@/components/SelectAllCheckbox";
 import PhoneInput from "@/components/PhoneInput";
 import { externalUrl } from "@/lib/url";
 import { readUploadResponse } from "@/lib/uploadError";
+import MultiSelectFilter from "@/components/MultiSelectFilter";
 import {
   Plus,
   Upload,
@@ -200,20 +201,23 @@ export default function CompaniesPage() {
   // search / filters / sort / pagination
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  // companyType / country / segment hold MANY values (empty array = no filter).
+  // They outgrew a native <select> once imports pushed the option lists into
+  // the hundreds, so they render as searchable multi-selects.
   const [filters, setFilters] = useState<{
-    companyType: string;
+    companyType: string[];
     size: string;
     location: string;
-    country: string;
-    segment: string;
+    country: string[];
+    segment: string[];
     dateFrom: string; // YYYY-MM-DD inclusive
     dateTo: string;   // YYYY-MM-DD inclusive
   }>({
-    companyType: "",
+    companyType: [],
     size: "",
     location: "",
-    country: "",
-    segment: "",
+    country: [],
+    segment: [],
     dateFrom: "",
     dateTo: "",
   });
@@ -247,7 +251,7 @@ export default function CompaniesPage() {
         setNewSegment("");
         await loadSegments();
         // Select the newly-added segment so the user immediately sees it filter.
-        setFilters((f) => ({ ...f, segment: name }));
+        setFilters((f) => ({ ...f, segment: [name] }));
       }
     } finally {
       setAddingSegment(false);
@@ -527,21 +531,20 @@ export default function CompaniesPage() {
     const fromTs = filters.dateFrom ? new Date(`${filters.dateFrom}T00:00:00`).getTime() : null;
     const toTs   = filters.dateTo   ? new Date(`${filters.dateTo}T23:59:59.999`).getTime() : null;
 
+    // Multi-select filters: empty array = no constraint, otherwise the row must
+    // match one of the chosen values.
+    const anyOf = (chosen: string[], value: string | null | undefined) =>
+      chosen.length === 0 || chosen.some((c) => norm(c) === norm(value));
+
     let filtered = allRows.filter((r) => {
-      if (
-        filters.companyType &&
-        norm(r.companyType) !== norm(filters.companyType)
-      )
-        return false;
+      if (!anyOf(filters.companyType, r.companyType)) return false;
       if (
         filters.size &&
         !sizeMatchesBucket(r.size, filters.size as SizeBucket)
       )
         return false;
-      if (filters.country && norm(r.country) !== norm(filters.country))
-        return false;
-      if (filters.segment && norm(r.segment) !== norm(filters.segment))
-        return false;
+      if (!anyOf(filters.country, r.country)) return false;
+      if (!anyOf(filters.segment, r.segment)) return false;
       if (filters.location && norm(r.location) !== norm(filters.location))
         return false;
       if (fromTs !== null || toTs !== null) {
@@ -595,8 +598,8 @@ export default function CompaniesPage() {
   const sizeOptions = useMemo(() => {
     const base = allRows.filter(
       (r) =>
-        (filters.companyType
-          ? norm(r.companyType) === norm(filters.companyType)
+        (filters.companyType.length
+          ? filters.companyType.some((c) => norm(c) === norm(r.companyType))
           : true) &&
         (filters.location
           ? norm(r.location) === norm(filters.location)
@@ -614,8 +617,8 @@ export default function CompaniesPage() {
   const locationOptions = useMemo(() => {
     const base = allRows.filter(
       (r) =>
-        (filters.companyType
-          ? norm(r.companyType) === norm(filters.companyType)
+        (filters.companyType.length
+          ? filters.companyType.some((c) => norm(c) === norm(r.companyType))
           : true) &&
         (filters.size ? norm(r.size) === norm(filters.size) : true) &&
         (debouncedSearch
@@ -635,9 +638,17 @@ export default function CompaniesPage() {
     [allRows]
   );
 
+  // Segment options for the filter = the registered list plus anything actually
+  // sitting on a row. Imported segments are registered on import now, but rows
+  // loaded before that ran would otherwise be unfilterable.
+  const segmentFilterOptions = useMemo(
+    () => uniqueSorted([...segmentOptions, ...allRows.map((r) => r.segment)]),
+    [segmentOptions, allRows]
+  );
+
   function clearFilters() {
     setSearch("");
-    setFilters({ companyType: "", size: "", location: "", country: "", segment: "", dateFrom: "", dateTo: "" });
+    setFilters({ companyType: [], size: "", location: "", country: [], segment: [], dateFrom: "", dateTo: "" });
     setSortKey("name");
     setSortDir("asc");
   }
@@ -1145,62 +1156,40 @@ export default function CompaniesPage() {
 
           {/* type */}
           <div className="md:col-span-2">
-            <label className="text-xs text-gray-400 block mb-1">
-              Company Type
-            </label>
-            <select
-              value={filters.companyType}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, companyType: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All</option>
-              {companyTypeOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="companies-type"
+              label="Company Type"
+              options={companyTypeOptions}
+              selected={filters.companyType}
+              onChange={(next) => setFilters((f) => ({ ...f, companyType: next }))}
+              searchPlaceholder="Search types…"
+            />
           </div>
 
           {/* country */}
           <div className="md:col-span-2">
-            <label className="text-xs text-gray-400 block mb-1">Country</label>
-            <select
-              value={filters.country}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, country: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All</option>
-              {countryOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="companies-country"
+              label="Country"
+              options={countryOptions}
+              selected={filters.country}
+              onChange={(next) => setFilters((f) => ({ ...f, country: next }))}
+              searchPlaceholder="Search countries…"
+            />
           </div>
 
-          {/* segment — input for "+ new segment" is moved out of this cell so
-              the Segment column stays the same height as its neighbours. */}
+          {/* segment — the "+ new segment" input lives in the footer row so the
+              Segment cell stays the same height as its neighbours. */}
           <div className="md:col-span-2">
-            <label className="text-xs text-gray-400 block mb-1">Segment</label>
-            <select
-              value={filters.segment}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, segment: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All segments</option>
-              {segmentOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="companies-segment"
+              label="Segment"
+              options={segmentFilterOptions}
+              selected={filters.segment}
+              onChange={(next) => setFilters((f) => ({ ...f, segment: next }))}
+              placeholder="All segments"
+              searchPlaceholder="Search segments…"
+            />
           </div>
 
           {/* created date range */}
@@ -1451,7 +1440,7 @@ export default function CompaniesPage() {
           Backend PATCH /api/companies/[company_id] enforces ownership. */}
       {editCompanyId && (
         <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-900">
             <div className="px-5 pt-5 pb-3 border-b border-gray-800 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-white">Edit company</h3>
               {editCompanyErr && <div className="text-sm text-red-300">{editCompanyErr}</div>}

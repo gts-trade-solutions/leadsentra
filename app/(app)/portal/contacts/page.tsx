@@ -10,6 +10,7 @@ import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton"
 import SelectAllCheckbox from "@/components/SelectAllCheckbox";
 import { externalUrl } from "@/lib/url";
 import { readUploadResponse } from "@/lib/uploadError";
+import MultiSelectFilter from "@/components/MultiSelectFilter";
 import PhoneInput from "@/components/PhoneInput";
 
 import {
@@ -63,6 +64,7 @@ type Row = {
   notes: string | null;
   country: string | null;        // joined from companies.country
   segment: string | null;        // joined from companies.segment
+  company_type: string | null;   // joined from companies.company_type/industry
   created_at?: string | null;    // ISO timestamp
   linkedin_url?: string | null;
   facebook_url?: string | null;
@@ -158,15 +160,28 @@ export default function ContactsPage() {
 
   // search/filters/sort
   const [search, setSearch] = useState("");
+  // country / segment / companyType hold MANY values (empty array = no filter)
+  // and render as searchable multi-selects — the option lists run to hundreds
+  // of entries once companies are imported.
   const [filters, setFilters] = useState<{
     title: string;
     company: string;
     status: "all" | "locked" | "unlocked";
-    country: string;
-    segment: string;
+    country: string[];
+    segment: string[];
+    companyType: string[];
     dateFrom: string;
     dateTo: string;
-  }>({ title: "", company: "", status: "all", country: "", segment: "", dateFrom: "", dateTo: "" });
+  }>({
+    title: "",
+    company: "",
+    status: "all",
+    country: [],
+    segment: [],
+    companyType: [],
+    dateFrom: "",
+    dateTo: "",
+  });
 
   // Per-column header filters — text "contains" search rendered inline under
   // each column header (Name / Email / Title / Company / Location / Phone /
@@ -458,6 +473,7 @@ export default function ContactsPage() {
         notes: c.notes ?? null,
         country: c.country ?? null,
         segment: c.segment ?? null,
+        company_type: c.company_type ?? null,
         created_at: c.created_at ?? null,
         linkedin_url: c.linkedin_url ?? null,
         facebook_url: c.facebook_url ?? null,
@@ -610,14 +626,15 @@ export default function ContactsPage() {
           ? filtered.filter((r) => !popularTitleSet.has(norm(r.title)))
           : filtered.filter((r) => norm(r.title) === norm(filters.title));
     }
-    if (filters.country)
-      filtered = filtered.filter(
-        (r) => norm(r.country ?? "") === norm(filters.country)
-      );
-    if (filters.segment)
-      filtered = filtered.filter(
-        (r) => norm(r.segment ?? "") === norm(filters.segment)
-      );
+    // Multi-select: empty array = no constraint, otherwise match any chosen value.
+    const anyOf = (chosen: string[], value: string | null | undefined) =>
+      chosen.length === 0 || chosen.some((c) => norm(c) === norm(value ?? ""));
+    filtered = filtered.filter(
+      (r) =>
+        anyOf(filters.country, r.country) &&
+        anyOf(filters.segment, r.segment) &&
+        anyOf(filters.companyType, r.company_type)
+    );
     if (filters.dateFrom || filters.dateTo) {
       const fromTs = filters.dateFrom
         ? new Date(`${filters.dateFrom}T00:00:00`).getTime()
@@ -689,9 +706,37 @@ export default function ContactsPage() {
     })();
   }, []);
 
+  // Offer the registered segments plus anything actually present on a row, so
+  // a segment that predates registration is still filterable.
+  const segmentFilterOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([...segmentOptions, ...allRows.map((r) => norm(r.segment ?? ""))].filter(Boolean))
+      ).sort((a, b) => a.localeCompare(b)),
+    [segmentOptions, allRows]
+  );
+
+  // Company Type comes from the joined company record.
+  const companyTypeOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(allRows.map((r) => norm(r.company_type ?? "")).filter(Boolean))
+      ).sort((a, b) => a.localeCompare(b)),
+    [allRows]
+  );
+
   const clearFilters = () => {
     setSearch("");
-    setFilters({ title: "", company: "", status: "all", country: "", segment: "", dateFrom: "", dateTo: "" });
+    setFilters({
+      title: "",
+      company: "",
+      status: "all",
+      country: [],
+      segment: [],
+      companyType: [],
+      dateFrom: "",
+      dateTo: "",
+    });
     setColumnFilters({ name: "", email: "", title: "", company: "", phone: "", linkedin_url: "" });
     setSortKey("name");
     setSortDir("asc");
@@ -1357,39 +1402,39 @@ export default function ContactsPage() {
           )}
 
           <div className="md:col-span-3">
-            <label className="text-xs text-gray-400 block mb-1">Country</label>
-            <select
-              value={filters.country}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, country: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All countries</option>
-              {countryOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="contacts-country"
+              label="Country"
+              options={countryOptions}
+              selected={filters.country}
+              onChange={(next) => setFilters((f) => ({ ...f, country: next }))}
+              placeholder="All countries"
+              searchPlaceholder="Search countries…"
+            />
           </div>
 
           <div className="md:col-span-3">
-            <label className="text-xs text-gray-400 block mb-1">Segment</label>
-            <select
-              value={filters.segment}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, segment: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All segments</option>
-              {segmentOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="contacts-segment"
+              label="Segment"
+              options={segmentFilterOptions}
+              selected={filters.segment}
+              onChange={(next) => setFilters((f) => ({ ...f, segment: next }))}
+              placeholder="All segments"
+              searchPlaceholder="Search segments…"
+            />
+          </div>
+
+          <div className="md:col-span-3">
+            <MultiSelectFilter
+              id="contacts-company-type"
+              label="Company Type"
+              options={companyTypeOptions}
+              selected={filters.companyType}
+              onChange={(next) => setFilters((f) => ({ ...f, companyType: next }))}
+              placeholder="All types"
+              searchPlaceholder="Search types…"
+            />
           </div>
 
           <div className="md:col-span-3">
@@ -1889,7 +1934,7 @@ export default function ContactsPage() {
       {/* Add Contact Modal (Admin only) */}
       {showAdd && (
         <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
-          <div className="w-full max-w-3xl rounded-xl border border-gray-700 bg-gray-900">
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-900">
             <div className="px-5 pt-5 pb-3 border-b border-gray-800 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-white">Add Contact</h3>
               {addErr && <div className="text-sm text-red-300">{addErr}</div>}
@@ -2406,7 +2451,7 @@ export default function ContactsPage() {
       {/* Send Modal */}
       {openSend && target && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-800 rounded-2xl border border-gray-700 w-full max-w-3xl">
+          <div className="bg-gray-800 rounded-2xl border border-gray-700 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="p-5 border-b border-gray-700 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-white">
@@ -2552,7 +2597,7 @@ export default function ContactsPage() {
       {/* Tracking Modal */}
       {openTrack && target && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-800 rounded-2xl border border-gray-700 w-full max-w-5xl">
+          <div className="bg-gray-800 rounded-2xl border border-gray-700 w-full max-w-5xl max-h-[90vh] overflow-y-auto">
             <div className="p-5 border-b border-gray-700 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-white">

@@ -126,6 +126,7 @@ export async function GET(req: Request) {
         co.website     AS website,
         co.linkedin    AS company_linkedin,
         co.segment     AS segment,
+        COALESCE(co.company_type, co.industry) AS company_type,
         c.company_id,
         c.created_at,
         ${unlockedExpr} AS is_unlocked
