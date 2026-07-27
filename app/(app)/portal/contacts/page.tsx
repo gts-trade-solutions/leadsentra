@@ -164,12 +164,12 @@ export default function ContactsPage() {
 
   // search/filters/sort
   const [search, setSearch] = useState("");
-  // country / segment / companyType hold MANY values (empty array = no filter)
-  // and render as searchable multi-selects — the option lists run to hundreds
-  // of entries once companies are imported.
+  // title / company / country / segment / companyType hold MANY values (empty
+  // array = no filter) and render as searchable multi-selects — the option
+  // lists run to hundreds of entries once companies are imported.
   const [filters, setFilters] = useState<{
-    title: string;
-    company: string;
+    title: string[];
+    company: string[];
     status: "all" | "locked" | "unlocked";
     country: string[];
     segment: string[];
@@ -177,8 +177,8 @@ export default function ContactsPage() {
     dateFrom: string;
     dateTo: string;
   }>({
-    title: "",
-    company: "",
+    title: [],
+    company: [],
     status: "all",
     country: [],
     segment: [],
@@ -577,13 +577,23 @@ export default function ContactsPage() {
     );
   }, [allRows]);
 
+  // Multi-select: empty array = no constraint, otherwise match any chosen value.
+  const anyOf = (chosen: string[], value: string | null | undefined) =>
+    chosen.length === 0 || chosen.some((c) => norm(c) === norm(value ?? ""));
+
+  // Title carries the synthetic "Others" bucket (everything outside the top N),
+  // which can be combined with named titles: "Sales Manager" OR "Others".
+  const titleMatches = (chosen: string[], value: string | null | undefined) => {
+    if (chosen.length === 0) return true;
+    const t = norm(value);
+    return chosen.some((c) =>
+      c === "Others" ? !popularTitleSet.has(t) : norm(c) === t
+    );
+  };
+
   const companyOptions = useMemo(() => {
     const base = allRows.filter((r) => {
-      const titlePass = !filters.title
-        ? true
-        : filters.title === "Others"
-        ? !popularTitleSet.has(norm(r.title))
-        : norm(r.title) === norm(filters.title);
+      const titlePass = titleMatches(filters.title, r.title);
       const statusPass =
         filters.status === "all"
           ? true
@@ -599,8 +609,7 @@ export default function ContactsPage() {
 
   const titleOptions = useMemo(() => {
     const base = allRows.filter((r) => {
-      const companyPass =
-        !filters.company || norm(r.company) === norm(filters.company);
+      const companyPass = anyOf(filters.company, r.company);
       const statusPass =
         filters.status === "all"
           ? true
@@ -623,21 +632,10 @@ export default function ContactsPage() {
   // filter/sort/paginate
   useEffect(() => {
     let filtered = allRows.filter((r) => matchesSearch(r));
-    if (filters.company)
-      filtered = filtered.filter(
-        (r) => norm(r.company) === norm(filters.company)
-      );
-    if (filters.title) {
-      filtered =
-        filters.title === "Others"
-          ? filtered.filter((r) => !popularTitleSet.has(norm(r.title)))
-          : filtered.filter((r) => norm(r.title) === norm(filters.title));
-    }
-    // Multi-select: empty array = no constraint, otherwise match any chosen value.
-    const anyOf = (chosen: string[], value: string | null | undefined) =>
-      chosen.length === 0 || chosen.some((c) => norm(c) === norm(value ?? ""));
     filtered = filtered.filter(
       (r) =>
+        anyOf(filters.company, r.company) &&
+        titleMatches(filters.title, r.title) &&
         anyOf(filters.country, r.country) &&
         anyOf(filters.segment, r.segment) &&
         anyOf(filters.companyType, r.company_type)
@@ -735,8 +733,8 @@ export default function ContactsPage() {
   const clearFilters = () => {
     setSearch("");
     setFilters({
-      title: "",
-      company: "",
+      title: [],
+      company: [],
       status: "all",
       country: [],
       segment: [],
@@ -748,6 +746,91 @@ export default function ContactsPage() {
     setSortKey("name");
     setSortDir("asc");
   };
+
+  /** Are any filters narrowing the table right now? Drives the Export label. */
+  const filtersActive =
+    !!search.trim() ||
+    filters.title.length > 0 ||
+    filters.company.length > 0 ||
+    filters.country.length > 0 ||
+    filters.segment.length > 0 ||
+    filters.companyType.length > 0 ||
+    filters.status !== "all" ||
+    !!filters.dateFrom ||
+    !!filters.dateTo ||
+    Object.values(columnFilters).some((v) => v.trim());
+
+  /**
+   * The current filter set, encoded for /api/contacts/export.
+   *
+   * The export runs the same filters in SQL rather than exporting the rows the
+   * browser happens to hold, so a filtered download covers every matching
+   * contact — not just the first page the list API returned.
+   */
+  const exportFilterParams = () => {
+    const p = new URLSearchParams();
+    if (search.trim()) p.set("q", search.trim());
+    filters.title.forEach((t) => p.append("title", t));
+    if (filters.title.includes("Others")) {
+      // "Others" is a client-side bucket: everything outside the top-N titles.
+      // Send that list so the server can express it as NOT IN (...).
+      p.set("titleOthers", "1");
+      popularTitleSet.forEach((t) => p.append("notTitle", t));
+    }
+    filters.company.forEach((c) => p.append("company", c));
+    filters.country.forEach((c) => p.append("country", c));
+    filters.segment.forEach((s) => p.append("segment", s));
+    filters.companyType.forEach((t) => p.append("type", t));
+    if (filters.dateFrom) p.set("from", filters.dateFrom);
+    if (filters.dateTo) p.set("to", filters.dateTo);
+    if (filters.status !== "all") p.set("status", filters.status);
+    const cf: [string, string][] = [
+      ["cf_name", columnFilters.name],
+      ["cf_email", columnFilters.email],
+      ["cf_title", columnFilters.title],
+      ["cf_company", columnFilters.company],
+      ["cf_phone", columnFilters.phone],
+      ["cf_linkedin_url", columnFilters.linkedin_url],
+    ];
+    for (const [k, v] of cf) if (v.trim()) p.set(k, v.trim());
+    return p;
+  };
+
+  const [exporting, setExporting] = useState(false);
+
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      // POST, not a plain link: the Company/Title selections can run to
+      // hundreds of values, which would overflow a GET query string.
+      const res = await fetch("/api/contacts/export", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: exportFilterParams().toString(),
+      });
+      if (!res.ok) throw new Error((await res.text()) || "Export failed");
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = `contacts-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke on the next tick — revoking synchronously can cancel the
+      // download in some browsers before it has started reading the blob.
+      setTimeout(() => URL.revokeObjectURL(href), 1000);
+    } catch (e: any) {
+      toast({
+        title: "Export failed",
+        description: e?.message || "Could not build the CSV",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // counts
   const total = rows.length;
@@ -1164,12 +1247,16 @@ export default function ContactsPage() {
           }}
         />
         <button
-          onClick={() => {
-            window.location.href = "/api/contacts/export";
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium"
+          onClick={exportCsv}
+          disabled={exporting}
+          title={
+            filtersActive
+              ? "Downloads only the contacts matching the filters above"
+              : "Downloads every contact you can access"
+          }
+          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium disabled:opacity-60"
         >
-          Export
+          {exporting ? "Exporting…" : filtersActive ? "Export filtered" : "Export"}
         </button>
         <button
           onClick={() => {
@@ -1388,39 +1475,27 @@ export default function ContactsPage() {
           </div>
 
           <div className="md:col-span-3">
-            <label className="text-xs text-gray-400 block mb-1">Title</label>
-            <select
-              value={filters.title}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, title: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All titles</option>
-              {titleOptions.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="contacts-title"
+              label="Title"
+              options={titleOptions}
+              selected={filters.title}
+              onChange={(next) => setFilters((f) => ({ ...f, title: next }))}
+              placeholder="All titles"
+              searchPlaceholder="Search titles…"
+            />
           </div>
 
           <div className="md:col-span-3">
-            <label className="text-xs text-gray-400 block mb-1">Company</label>
-            <select
-              value={filters.company}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, company: e.target.value }))
-              }
-              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
-            >
-              <option value="">All companies</option>
-              {companyOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
+            <MultiSelectFilter
+              id="contacts-company"
+              label="Company"
+              options={companyOptions}
+              selected={filters.company}
+              onChange={(next) => setFilters((f) => ({ ...f, company: next }))}
+              placeholder="All companies"
+              searchPlaceholder="Search companies…"
+            />
           </div>
 
           {!isStaffUser && (
