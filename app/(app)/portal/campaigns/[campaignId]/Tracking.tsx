@@ -74,16 +74,11 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
         toast({ variant: "destructive", title: "Failed to load tracking", description: recJson?.error || "" });
       }
       setRows(Array.isArray(recJson?.recipients) ? recJson.recipients : []);
-
-      // Campaign summary (from the list endpoint)
-      const listRes = await fetch("/api/campaigns", {
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const listJson = await listRes.json().catch(() => ({}));
-      const summary = (Array.isArray(listJson?.campaigns) ? listJson.campaigns : [])
-        .find((c: CampaignSummary) => c.id === campaignId);
-      if (summary) setCampaign(summary);
+      // The summary comes back with the recipients. It used to be found by
+      // pulling the entire campaign list and filtering client-side, which
+      // fetched everything on every 15s refresh and never found a campaign
+      // owned by another user (i.e. any campaign an admin opened).
+      if (recJson?.campaign) setCampaign(recJson.campaign as CampaignSummary);
     } catch (e: any) {
       toast({ variant: "destructive", title: "Network error", description: e?.message || "" });
     } finally {

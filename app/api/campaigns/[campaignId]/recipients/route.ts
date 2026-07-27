@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { isStaff } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -11,11 +12,22 @@ export async function GET(
   const session = await getUser();
   if (!session) return NextResponse.json({ recipients: [] }, { status: 401 });
 
+  // Staff (admin/moderator) see every campaign — same rule as the global
+  // tracking list and this route's siblings (progress / cancel).  Without it
+  // an admin could open any campaign from Tracking and got a 404 with an
+  // empty table, because the campaign belongs to another user.
+  const staffBypass = isStaff(session.role);
+
   const [own] = await db.execute(
-    "SELECT id FROM campaigns WHERE id = ? AND user_id = ? LIMIT 1",
-    [params.campaignId, session.id]
+    `SELECT id, name, status, subject, created_at
+       FROM campaigns
+      WHERE id = ?
+        ${staffBypass ? "" : "AND user_id = ?"}
+      LIMIT 1`,
+    staffBypass ? [params.campaignId] : [params.campaignId, session.id]
   );
-  if (!(own as any[]).length) {
+  const campaign = (own as any[])[0];
+  if (!campaign) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -31,5 +43,8 @@ export async function GET(
       ORDER BY cr.created_at DESC`,
     [params.campaignId]
   );
-  return NextResponse.json({ recipients: rows });
+  // The campaign summary rides along so the page doesn't have to pull the
+  // whole campaign list just to read this one's name — which also never
+  // worked for staff viewing someone else's campaign.
+  return NextResponse.json({ campaign, recipients: rows });
 }
