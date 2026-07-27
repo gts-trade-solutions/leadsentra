@@ -15,6 +15,9 @@ import {
   Download,
   ShieldOff,
   Send,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
@@ -106,6 +109,12 @@ const STATUS_CHIPS: { v: Status; label: string }[] = [
 ];
 
 const PER_PAGE = 100;
+
+/** Mirrors EDITABLE_STATUSES in /api/email-status/[id] — a row the provider
+ *  already accepted is delivery history and can't have its address rewritten. */
+const EDITABLE_STATUSES = new Set([
+  "queued", "suppressed", "failed", "bounced", "complained",
+]);
 
 export default function Tracking() {
   const [from, setFrom] = useState(daysAgoIso(29));
@@ -229,6 +238,12 @@ export default function Tracking() {
       setSuppressBusy(false);
     }
   }
+
+  /** Patch one row in place after an inline edit — cheaper and less jarring
+   *  than refetching the whole page. */
+  const patchRow = useCallback((id: string, patch: Partial<Row>) => {
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
@@ -465,11 +480,12 @@ export default function Tracking() {
                         {r.campaign_name || r.campaign_id}
                       </Link>
                     </td>
-                    <td className="px-3 py-2 max-w-[260px] truncate">
-                      <div className="flex flex-col">
-                        <span className="text-gray-300 text-sm">{r.contact_name || "—"}</span>
-                        <span className="text-gray-500 text-xs">{r.email}</span>
-                      </div>
+                    <td className="px-3 py-2 max-w-[300px]">
+                      <RecipientCell
+                        row={r}
+                        onPatch={patchRow}
+                        onRequeued={() => { fetchRows(); fetchCampaigns(); }}
+                      />
                     </td>
                     <td className="px-3 py-2">
                       <StatusBadge status={r.status} />
@@ -547,6 +563,148 @@ export default function Tracking() {
         </div>
       </div>
     </AuthGuard>
+  );
+}
+
+/**
+ * Recipient name + address, with the address editable in place.
+ *
+ * Bad addresses (mojibake from a CSV import, a typo'd domain) surface here
+ * first — as a `suppressed`/`bounced`/`failed` row — so this is where the fix
+ * belongs.  Saving writes the correction to the recipient row AND back to the
+ * linked contact, so the next campaign uses the good address too.  Ticking
+ * "re-queue" also drops the row back into the send queue for this campaign.
+ */
+function RecipientCell({
+  row,
+  onPatch,
+  onRequeued,
+}: {
+  row: Row;
+  onPatch: (id: string, patch: Partial<Row>) => void;
+  onRequeued: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(row.email);
+  const [requeue, setRequeue] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const canEdit = EDITABLE_STATUSES.has(row.status);
+  // Already queued — nothing to put back.
+  const canRequeue = row.status !== "queued";
+
+  function start() {
+    setValue(row.email);
+    setRequeue(false);
+    setErr(null);
+    setEditing(true);
+  }
+
+  async function save() {
+    const email = value.trim().toLowerCase();
+    if (!email || (email === row.email.trim().toLowerCase() && !requeue)) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/email-status/${row.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email, requeue }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Update failed");
+      onPatch(row.id, { email: j.email, status: j.status });
+      setEditing(false);
+      // Status counts / KPI tiles moved — pull fresh numbers.
+      if (j.requeued) onRequeued();
+    } catch (e: any) {
+      setErr(e?.message || "Update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex flex-col">
+        <span className="text-gray-300 text-sm truncate">{row.contact_name || "—"}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-gray-500 text-xs truncate" title={row.email}>
+            {row.email}
+          </span>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={start}
+              title="Correct this address"
+              aria-label={`Correct address ${row.email}`}
+              className="shrink-0 text-gray-600 hover:text-emerald-400"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-gray-300 text-sm truncate">{row.contact_name || "—"}</span>
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          type="email"
+          value={value}
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          aria-label="Corrected email address"
+          className="w-full min-w-0 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-60"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy}
+          title="Save"
+          aria-label="Save address"
+          className="shrink-0 p-1 rounded text-emerald-400 hover:bg-gray-800 disabled:opacity-50"
+        >
+          <Check className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          disabled={busy}
+          title="Cancel"
+          aria-label="Cancel edit"
+          className="shrink-0 p-1 rounded text-gray-400 hover:bg-gray-800 disabled:opacity-50"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {canRequeue && (
+        <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
+          <input
+            type="checkbox"
+            checked={requeue}
+            disabled={busy}
+            onChange={(e) => setRequeue(e.target.checked)}
+            className="accent-emerald-500"
+          />
+          Re-queue for sending
+        </label>
+      )}
+      {err && <span className="text-[11px] text-rose-300">{err}</span>}
+    </div>
   );
 }
 
