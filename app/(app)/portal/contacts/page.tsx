@@ -1583,6 +1583,7 @@ export default function ContactsPage() {
       ) : (
         <>
           <Table
+            maxHeight="70vh"
             headers={headers}
             data={currentRows.map((r) => ({
               ...(isAdmin

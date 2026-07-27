@@ -1482,7 +1482,7 @@ export default function CompaniesPage() {
         />
       ) : (
         <>
-          <Table headers={headers} data={tableData} />
+          <Table headers={headers} data={tableData} maxHeight="70vh" />
 
           {/* Pagination */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 py-4">
