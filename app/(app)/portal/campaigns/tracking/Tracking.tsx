@@ -643,9 +643,10 @@ function RecipientCell({
               onClick={start}
               title="Correct this address"
               aria-label={`Correct address ${row.email}`}
-              className="shrink-0 text-gray-600 hover:text-emerald-400"
+              className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-700 text-gray-300 hover:text-emerald-300 hover:border-emerald-600 hover:bg-emerald-600/10"
             >
               <Pencil className="w-3 h-3" />
+              <span className="text-[10px] leading-none">Edit</span>
             </button>
           )}
         </span>
