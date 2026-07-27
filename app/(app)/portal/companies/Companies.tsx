@@ -199,6 +199,14 @@ export default function CompaniesPage() {
     });
   }
 
+  // Which data columns the table shows. Chosen by label so the picker (a
+  // MultiSelectFilter) can work in plain strings; Select/Actions aren't listed
+  // because they're controls rather than data. Persisted per browser.
+  // Declared before `headers` below, which reads it during render.
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(
+    DEFAULT_COMPANY_COLUMNS
+  );
+
   // Admin-only "Select" column drives the bulk-delete flow. Hidden for
   // everyone else so the checkboxes don't tease a capability they don't have.
   // The middle columns are user-selectable (see visibleColumns); Select and
@@ -222,12 +230,7 @@ export default function CompaniesPage() {
   // search / filters / sort / pagination
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  // Which data columns the table shows. Chosen by label so the picker (a
-  // MultiSelectFilter) can work in plain strings; Select/Actions aren't listed
-  // because they're controls rather than data. Persisted per browser.
-  const [visibleColumns, setVisibleColumns] = useState<string[]>(
-    DEFAULT_COMPANY_COLUMNS
-  );
+  // Restore the persisted column choice (see visibleColumns above).
   useEffect(() => {
     try {
       const saved = localStorage.getItem(COMPANY_COLUMNS_KEY);
