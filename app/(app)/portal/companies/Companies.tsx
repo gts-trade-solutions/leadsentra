@@ -12,9 +12,11 @@ import PhoneInput from "@/components/PhoneInput";
 import { externalUrl } from "@/lib/url";
 import { readUploadResponse } from "@/lib/uploadError";
 import MultiSelectFilter from "@/components/MultiSelectFilter";
+import DataReviewModal from "@/components/DataReviewModal";
 import {
   Plus,
   Upload,
+  AlertTriangle,
   RefreshCcw,
   Linkedin,
   Globe,
@@ -314,6 +316,32 @@ export default function CompaniesPage() {
       setAddingSegment(false);
     }
   }
+
+  // Approved values for the three columns that feed filter dropdowns. The
+  // dropdowns are built from these rather than from whatever is stored, so a
+  // misspelling that arrived in a spreadsheet can't become a filter option —
+  // it waits in "Needs review" instead.
+  const [approvedTypes, setApprovedTypes] = useState<string[]>([]);
+  const [approvedCountries, setApprovedCountries] = useState<string[]>([]);
+  const [reviewCount, setReviewCount] = useState(0);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
+  async function loadVocab() {
+    try {
+      const res = await fetch("/api/companies/vocab", { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      setApprovedTypes(Array.isArray(json?.terms?.company_type) ? json.terms.company_type : []);
+      setApprovedCountries(Array.isArray(json?.terms?.country) ? json.terms.country : []);
+      setReviewCount(Array.isArray(json?.review) ? json.review.length : 0);
+    } catch {
+      // Endpoint unreachable (or the migration hasn't run): fall back to
+      // building the dropdowns from the stored values, as before.
+      setApprovedTypes([]);
+      setApprovedCountries([]);
+      setReviewCount(0);
+    }
+  }
+
   const [sortKey, setSortKey] = useState<
     "name" | "companyType" | "size" | "location"
   >("name");
@@ -329,7 +357,13 @@ export default function CompaniesPage() {
     parsed?: number;
     valid?: number;
     inserted?: number;
+    updated?: number;
+    failed?: number;
     errors?: { row: number; error: string }[];
+    /** Misspellings the importer recognised and fixed on the way in. */
+    corrections?: { field: string; from: string; to: string; rows: number }[];
+    /** Values it couldn't place — held out of the filters until reviewed. */
+    needsReview?: { field: string; value: string; rows: number; suggestion: string | null }[];
   } | null>(null);
 
   // modals
@@ -537,10 +571,15 @@ export default function CompaniesPage() {
     load();
     fetchWalletBalance();
     loadSegments();
+    loadVocab();
   }, []);
 
   // helpers
   const norm = (v?: string | null) => (v ?? "").toString().trim();
+  // Filters compare on this, not on the raw string: MySQL stores
+  // "Manufacturer" and "manufacturer" as the same value but JavaScript's Set
+  // and === do not, which used to split one type across two filter options.
+  const foldKey = (v?: string | null) => norm(v).toLowerCase();
   const includesI = (hay: string, needle: string) =>
     hay.toLowerCase().includes(needle.toLowerCase());
 
@@ -615,7 +654,7 @@ export default function CompaniesPage() {
     // Multi-select filters: empty array = no constraint, otherwise the row must
     // match one of the chosen values.
     const anyOf = (chosen: string[], value: string | null | undefined) =>
-      chosen.length === 0 || chosen.some((c) => norm(c) === norm(value));
+      chosen.length === 0 || chosen.some((c) => foldKey(c) === foldKey(value));
 
     let filtered = allRows.filter((r) => {
       if (!anyOf(filters.companyType, r.companyType)) return false;
@@ -654,10 +693,23 @@ export default function CompaniesPage() {
   }, [allRows, debouncedSearch, filters, sortKey, sortDir]);
 
   // options for select boxes (respect other filters/search)
+  // Deduplicated case-insensitively — "Manufacturer" and "MANUFACTURER" are one
+  // option, spelled the way it first appears.
   const uniqueSorted = (arr: string[]) =>
-    Array.from(new Set(arr.filter(Boolean).map(norm))).sort((a, b) =>
-      a.localeCompare(b)
-    );
+    Array.from(
+      new Map(arr.filter(Boolean).map(norm).map((v) => [v.toLowerCase(), v])).values()
+    ).sort((a, b) => a.localeCompare(b));
+
+  /**
+   * Keep only values that are on the approved list. An empty approved list
+   * means the vocabulary isn't configured (or the endpoint is unreachable), in
+   * which case we show everything rather than an empty dropdown.
+   */
+  const onlyApproved = (options: string[], approved: string[]) => {
+    if (approved.length === 0) return options;
+    const ok = new Set(approved.map((t) => t.toLowerCase()));
+    return options.filter((o) => ok.has(o.toLowerCase()));
+  };
 
   const companyTypeOptions = useMemo(() => {
     const base = allRows.filter(
@@ -673,14 +725,14 @@ export default function CompaniesPage() {
             )
           : true)
     );
-    return uniqueSorted(base.map((r) => r.companyType));
-  }, [allRows, filters.size, filters.location, debouncedSearch]);
+    return onlyApproved(uniqueSorted(base.map((r) => r.companyType)), approvedTypes);
+  }, [allRows, filters.size, filters.location, debouncedSearch, approvedTypes]);
 
   const sizeOptions = useMemo(() => {
     const base = allRows.filter(
       (r) =>
         (filters.companyType.length
-          ? filters.companyType.some((c) => norm(c) === norm(r.companyType))
+          ? filters.companyType.some((c) => foldKey(c) === foldKey(r.companyType))
           : true) &&
         (filters.location
           ? norm(r.location) === norm(filters.location)
@@ -699,7 +751,7 @@ export default function CompaniesPage() {
     const base = allRows.filter(
       (r) =>
         (filters.companyType.length
-          ? filters.companyType.some((c) => norm(c) === norm(r.companyType))
+          ? filters.companyType.some((c) => foldKey(c) === foldKey(r.companyType))
           : true) &&
         (filters.size ? norm(r.size) === norm(filters.size) : true) &&
         (debouncedSearch
@@ -715,8 +767,8 @@ export default function CompaniesPage() {
   // Country dropdown options — distinct, sorted, independent of other filters
   // so the user can always switch country without first clearing other choices.
   const countryOptions = useMemo(
-    () => uniqueSorted(allRows.map((r) => r.country)),
-    [allRows]
+    () => onlyApproved(uniqueSorted(allRows.map((r) => r.country)), approvedCountries),
+    [allRows, approvedCountries]
   );
 
   // Segment options for the filter = the registered list plus anything actually
@@ -764,11 +816,16 @@ export default function CompaniesPage() {
       const { ok, json, message } = await readUploadResponse(res, file.size);
       if (ok) {
         setUploadResult(json);
-        toast({
-          title: "Import complete",
-          description: `${json.inserted ?? 0} added · ${json.failed ?? 0} failed`,
-        });
+        const parts = [
+          `${json.inserted ?? 0} added`,
+          `${json.updated ?? 0} updated`,
+          `${json.failed ?? 0} failed`,
+        ];
+        if (json.needsReview?.length) parts.push(`${json.needsReview.length} to review`);
+        toast({ title: "Import complete", description: parts.join(" · ") });
         await load();
+        // Corrections and new unknown values change both lists.
+        await loadVocab();
       } else {
         // Keep any row-level detail the API returned; otherwise show which
         // layer rejected the upload (proxy size limit, timeout, auth…).
@@ -1228,6 +1285,19 @@ export default function CompaniesPage() {
 
         {/* Bulk import — staff only (admins + moderators).
             Regular users can't upload CSVs; they have the per-row "Add Company" modal instead. */}
+        {/* Values stored on companies that aren't on the approved lists. Shown
+            only when there are some, so a clean database has no extra chrome. */}
+        {canImport && reviewCount > 0 && (
+          <button
+            onClick={() => setReviewOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
+            title="Spelling mistakes and unknown values found in the company data"
+          >
+            <AlertTriangle className="w-4 h-4" />
+            Needs review ({reviewCount})
+          </button>
+        )}
+
         {canImport && (
           <>
             <button
@@ -1302,6 +1372,15 @@ export default function CompaniesPage() {
           {loading ? "Refreshing…" : "Refresh"}
         </button> */}
       </SectionHeader>
+
+      <DataReviewModal
+        open={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        onApplied={async () => {
+          await load();
+          await loadVocab();
+        }}
+      />
 
       {/* Quick stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1440,13 +1519,84 @@ export default function CompaniesPage() {
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4 text-sm">
           <div className="font-medium">Upload summary</div>
           <div className="mt-1">
-            Parsed: <b>{uploadResult.parsed ?? 0}</b> • Valid:{" "}
-            <b>{uploadResult.valid ?? 0}</b> • Inserted/updated:{" "}
-            <b>{uploadResult.inserted ?? 0}</b>
+            Parsed: <b>{uploadResult.parsed ?? 0}</b> • Added:{" "}
+            <b>{uploadResult.inserted ?? 0}</b> • Updated:{" "}
+            <b>{uploadResult.updated ?? 0}</b> • Failed:{" "}
+            <b>{uploadResult.failed ?? 0}</b>
             {uploadResult.dryRun ? (
               <span className="ml-2 italic text-gray-400">(dry run)</span>
             ) : null}
           </div>
+          {(uploadResult.updated ?? 0) > 0 && (
+            <div className="mt-1 text-xs text-gray-400">
+              Rows matching a company already in the database updated it instead of
+              creating a second copy. Blank cells left the stored value alone.
+            </div>
+          )}
+
+          {/* Spellings the importer recognised and fixed on the way in. */}
+          {Array.isArray(uploadResult.corrections) &&
+            uploadResult.corrections.length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-emerald-300">
+                  Auto-corrected ({uploadResult.corrections.length})
+                </summary>
+                <ul className="mt-2 space-y-0.5">
+                  {uploadResult.corrections.map((c, i) => (
+                    <li key={i} className="text-xs text-gray-300">
+                      <span className="text-gray-500">{c.field}:</span> “{c.from}” →{" "}
+                      <b>“{c.to}”</b>{" "}
+                      <span className="text-gray-500">
+                        ({c.rows} {c.rows === 1 ? "row" : "rows"})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+
+          {/* Values nothing matched — imported, but held out of the filters. */}
+          {Array.isArray(uploadResult.needsReview) &&
+            uploadResult.needsReview.length > 0 && (
+              <div className="mt-3 rounded-lg border border-amber-800/60 bg-amber-950/30 p-3">
+                <div className="flex items-center gap-2 text-amber-200 text-xs font-medium">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {uploadResult.needsReview.length} value
+                  {uploadResult.needsReview.length === 1 ? "" : "s"} not recognised
+                  {canImport && (
+                    <button
+                      onClick={() => setReviewOpen(true)}
+                      className="ml-auto px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs"
+                    >
+                      Review now
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-amber-200/70 mt-1">
+                  These rows imported, but the values stay out of the filter dropdowns
+                  until someone confirms what they are.
+                </p>
+                <ul className="mt-2 space-y-0.5">
+                  {uploadResult.needsReview.slice(0, 10).map((r, i) => (
+                    <li key={i} className="text-xs text-gray-300">
+                      <span className="text-gray-500">{r.field}:</span> “{r.value}”{" "}
+                      <span className="text-gray-500">
+                        ({r.rows} {r.rows === 1 ? "row" : "rows"})
+                      </span>
+                      {r.suggestion && (
+                        <span className="text-gray-500"> — did you mean “{r.suggestion}”?</span>
+                      )}
+                    </li>
+                  ))}
+                  {uploadResult.needsReview.length > 10 && (
+                    <li className="text-xs text-gray-500">
+                      …and {uploadResult.needsReview.length - 10} more
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
           {Array.isArray(uploadResult.errors) &&
             uploadResult.errors.length > 0 && (
               <details className="mt-2">

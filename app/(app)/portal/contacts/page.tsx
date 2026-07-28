@@ -578,8 +578,11 @@ export default function ContactsPage() {
   }, [allRows]);
 
   // Multi-select: empty array = no constraint, otherwise match any chosen value.
+  // Compared case-insensitively: MySQL treats "Manufacturer" and "manufacturer"
+  // as one value, and the filter has to agree or half the rows go missing.
   const anyOf = (chosen: string[], value: string | null | undefined) =>
-    chosen.length === 0 || chosen.some((c) => norm(c) === norm(value ?? ""));
+    chosen.length === 0 ||
+    chosen.some((c) => norm(c).toLowerCase() === norm(value ?? "").toLowerCase());
 
   // Title carries the synthetic "Others" bucket (everything outside the top N),
   // which can be combined with named titles: "Sales Manager" OR "Others".
@@ -686,21 +689,34 @@ export default function ContactsPage() {
     setPage(1);
   }, [allRows, search, filters, columnFilters, sortKey, sortDir, popularTitleSet]);
 
-  // Country dropdown options — distinct, sorted.
-  const countryOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          allRows
-            .map((r) => norm(r.country ?? ""))
-            .filter(Boolean)
-        )
-      ).sort((a, b) => a.localeCompare(b)),
-    [allRows]
-  );
+  /**
+   * Distinct, sorted, and deduplicated case-insensitively so one real-world
+   * value can't appear twice under two spellings.
+   *
+   * `approved` is the controlled list for the column (see lib/vocab.ts). When
+   * it has entries, anything not on it is left out — a misspelling that arrived
+   * in a spreadsheet is not a filter option. An empty list means the
+   * vocabulary isn't configured, so everything is offered as before.
+   */
+  const optionsFrom = (values: (string | null | undefined)[], approved: string[]) => {
+    const seen = new Map<string, string>();
+    for (const v of values) {
+      const s = norm(v ?? "");
+      if (s && !seen.has(s.toLowerCase())) seen.set(s.toLowerCase(), s);
+    }
+    let out = Array.from(seen.values());
+    if (approved.length) {
+      const ok = new Set(approved.map((t) => t.toLowerCase()));
+      out = out.filter((o) => ok.has(o.toLowerCase()));
+    }
+    return out.sort((a, b) => a.localeCompare(b));
+  };
 
-  // Segment dropdown — fed from the company_segments lookup table.
+  // Approved values for the columns that feed dropdowns. Segments keep their
+  // own endpoint because the Add/Edit forms write to it.
   const [segmentOptions, setSegmentOptions] = useState<string[]>([]);
+  const [approvedTypes, setApprovedTypes] = useState<string[]>([]);
+  const [approvedCountries, setApprovedCountries] = useState<string[]>([]);
   useEffect(() => {
     (async () => {
       try {
@@ -708,26 +724,32 @@ export default function ContactsPage() {
         const json = await res.json().catch(() => ({}));
         setSegmentOptions(Array.isArray(json?.segments) ? json.segments : []);
       } catch { setSegmentOptions([]); }
+      try {
+        const res = await fetch("/api/companies/vocab", { cache: "no-store" });
+        const json = await res.json().catch(() => ({}));
+        setApprovedTypes(Array.isArray(json?.terms?.company_type) ? json.terms.company_type : []);
+        setApprovedCountries(Array.isArray(json?.terms?.country) ? json.terms.country : []);
+      } catch {
+        setApprovedTypes([]);
+        setApprovedCountries([]);
+      }
     })();
   }, []);
 
-  // Offer the registered segments plus anything actually present on a row, so
-  // a segment that predates registration is still filterable.
+  const countryOptions = useMemo(
+    () => optionsFrom(allRows.map((r) => r.country), approvedCountries),
+    [allRows, approvedCountries]
+  );
+
   const segmentFilterOptions = useMemo(
-    () =>
-      Array.from(
-        new Set([...segmentOptions, ...allRows.map((r) => norm(r.segment ?? ""))].filter(Boolean))
-      ).sort((a, b) => a.localeCompare(b)),
+    () => optionsFrom(allRows.map((r) => r.segment), segmentOptions),
     [segmentOptions, allRows]
   );
 
   // Company Type comes from the joined company record.
   const companyTypeOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(allRows.map((r) => norm(r.company_type ?? "")).filter(Boolean))
-      ).sort((a, b) => a.localeCompare(b)),
-    [allRows]
+    () => optionsFrom(allRows.map((r) => r.company_type), approvedTypes),
+    [allRows, approvedTypes]
   );
 
   const clearFilters = () => {
