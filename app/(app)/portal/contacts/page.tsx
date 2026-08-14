@@ -171,6 +171,9 @@ export default function ContactsPage() {
     title: string[];
     company: string[];
     status: "all" | "locked" | "unlocked";
+    /** "lead" = only contacts ticked as lead contacts; "normal" = only the
+     *  CRM-only ones that campaigns never mail. */
+    kind: "all" | "lead" | "normal";
     country: string[];
     segment: string[];
     companyType: string[];
@@ -180,6 +183,7 @@ export default function ContactsPage() {
     title: [],
     company: [],
     status: "all",
+    kind: "all",
     country: [],
     segment: [],
     companyType: [],
@@ -485,6 +489,12 @@ export default function ContactsPage() {
         linkedin_url: c.linkedin_url ?? null,
         facebook_url: c.facebook_url ?? null,
         instagram_url: c.instagram_url ?? null,
+        // The API has always returned this, but the mapping used to drop it —
+        // so every row arrived undefined, the Type badge read "Normal" for
+        // everyone regardless of the tick, and the "leads" counter matched the
+        // whole table. Normalized to exactly 'lead' | 'normal' so the badge,
+        // the counter and the Contact type filter all agree.
+        contact_type: c.contact_type === "lead" ? "lead" : "normal",
         is_unlocked: !!c.is_unlocked,
       }));
       setAllRows(mapped);
@@ -663,6 +673,13 @@ export default function ContactsPage() {
     if (filters.status === "unlocked")
       filtered = filtered.filter((r) => r.is_unlocked);
 
+    // Lead vs normal. contact_type is normalized to exactly one of the two at
+    // load, so this matches the Type badge and the counter exactly.
+    if (filters.kind === "lead")
+      filtered = filtered.filter((r) => r.contact_type === "lead");
+    if (filters.kind === "normal")
+      filtered = filtered.filter((r) => r.contact_type !== "lead");
+
     // Per-column header filters. matchColumnFilter handles both the "-" empty
     // shortcut and normal contains matching. Columns mirror the CSV template:
     //   company_id, contact_name, title, email, phone, linkedin_url
@@ -758,6 +775,7 @@ export default function ContactsPage() {
       title: [],
       company: [],
       status: "all",
+      kind: "all",
       country: [],
       segment: [],
       companyType: [],
@@ -778,6 +796,7 @@ export default function ContactsPage() {
     filters.segment.length > 0 ||
     filters.companyType.length > 0 ||
     filters.status !== "all" ||
+    filters.kind !== "all" ||
     !!filters.dateFrom ||
     !!filters.dateTo ||
     Object.values(columnFilters).some((v) => v.trim());
@@ -806,6 +825,7 @@ export default function ContactsPage() {
     if (filters.dateFrom) p.set("from", filters.dateFrom);
     if (filters.dateTo) p.set("to", filters.dateTo);
     if (filters.status !== "all") p.set("status", filters.status);
+    if (filters.kind !== "all") p.set("kind", filters.kind);
     const cf: [string, string][] = [
       ["cf_name", columnFilters.name],
       ["cf_email", columnFilters.email],
@@ -1336,12 +1356,26 @@ export default function ContactsPage() {
           </span>
           <span className="text-xs text-gray-400">contacts in total</span>
         </div>
-        <div className="flex items-baseline gap-2">
+        {/* Doubles as the shortcut into the Leads-only view — clicking the
+            count is the obvious move, so make it do the obvious thing. */}
+        <button
+          type="button"
+          onClick={() =>
+            setFilters((f) => ({ ...f, kind: f.kind === "lead" ? "all" : "lead" }))
+          }
+          aria-pressed={filters.kind === "lead"}
+          title={filters.kind === "lead" ? "Show all contacts again" : "Show lead contacts only"}
+          className={`flex items-baseline gap-2 rounded-lg px-2 py-1 -mx-2 transition-colors ${
+            filters.kind === "lead" ? "bg-emerald-900/30 ring-1 ring-emerald-700" : "hover:bg-gray-800"
+          }`}
+        >
           <span className="text-lg font-semibold text-emerald-400 tabular-nums">
-            {allRows.filter((r) => r.contact_type !== "normal").length.toLocaleString()}
+            {allRows.filter((r) => r.contact_type === "lead").length.toLocaleString()}
           </span>
-          <span className="text-xs text-gray-400">leads loaded</span>
-        </div>
+          <span className="text-xs text-gray-400">
+            {filters.kind === "lead" ? "leads — showing only these" : "leads loaded · show only"}
+          </span>
+        </button>
         <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-400 md:ml-auto">
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-flex items-center px-2 py-0.5 rounded-full border border-emerald-600 bg-emerald-900/30 text-emerald-300 font-medium">
@@ -1522,8 +1556,11 @@ export default function ContactsPage() {
 
           {!isStaffUser && (
             <div className="md:col-span-2">
-              <label className="text-xs text-gray-400 block mb-1">Status</label>
+              <label className="text-xs text-gray-400 block mb-1" htmlFor="contacts-status">
+                Status
+              </label>
               <select
+                id="contacts-status"
                 value={filters.status}
                 onChange={(e) =>
                   setFilters((f) => ({ ...f, status: e.target.value as any }))
@@ -1536,6 +1573,26 @@ export default function ContactsPage() {
               </select>
             </div>
           )}
+
+          {/* Lead vs normal — mirrors the "Lead contact" tick on the add/edit
+              form, so a list built for campaigns can be viewed on its own. */}
+          <div className={isStaffUser ? "md:col-span-3" : "md:col-span-2"}>
+            <label className="text-xs text-gray-400 block mb-1" htmlFor="contacts-kind">
+              Contact type
+            </label>
+            <select
+              id="contacts-kind"
+              value={filters.kind}
+              onChange={(e) =>
+                setFilters((f) => ({ ...f, kind: e.target.value as any }))
+              }
+              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
+            >
+              <option value="all">All contacts</option>
+              <option value="lead">Leads only</option>
+              <option value="normal">Normal only</option>
+            </select>
+          </div>
 
           <div className="md:col-span-3">
             <MultiSelectFilter

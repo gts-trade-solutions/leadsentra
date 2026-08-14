@@ -55,7 +55,10 @@ type Summary = {
   queued: number;
   open_rate: number;
   click_rate: number;
+  /** Bounces / sends, to one decimal — same definition as the SES console. */
   bounce_rate: number;
+  /** Complaints / sends. SES reports this separately from the bounce rate. */
+  complaint_rate: number;
 };
 
 type Status =
@@ -361,7 +364,8 @@ export default function Tracking() {
             sub={
               <>
                 {(summary?.bounced ?? 0).toLocaleString()} bounces ·{" "}
-                {(summary?.complained ?? 0).toLocaleString()} complaints
+                {(summary?.complained ?? 0).toLocaleString()} complaints (
+                {summary?.complaint_rate ?? 0}%)
               </>
             }
             icon={AlertTriangle}

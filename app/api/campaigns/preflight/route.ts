@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
+import { multiFilter, pushInClause, normalizeUploadedEmails, companyInboxes } from "@/lib/audience";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,48 +31,51 @@ export async function POST(req: Request) {
   const callerIsStaff = isStaff(session.role);
   let mode = String(audience?.mode || "all").toLowerCase();
   if (mode === "admin_all" && !callerIsStaff) mode = "all";
-  if (!["all", "filtered", "selected", "admin_all"].includes(mode)) mode = "all";
+  if (!["all", "filtered", "selected", "admin_all", "uploaded"].includes(mode)) mode = "all";
   const search = String(audience?.q || "").trim().toLowerCase();
-  const filterSegment    = String(audience?.segment    || "").trim();
-  const filterCountry    = String(audience?.country    || "").trim();
+  // Multi-select filters; legacy singular keys still honored. Must match
+  // POST /api/campaigns exactly or the preview count lies.
+  const filterSegments   = multiFilter(audience?.segments,  audience?.segment);
+  const filterCountries  = multiFilter(audience?.countries, audience?.country);
   const filterDepartment = String(audience?.department || "").trim();
   // Catalogue/offer sends restrict to 'lead' contacts; regular sends don't.
   const leadsOnly = audience?.leads_only === true;
   const leadClause = leadsOnly ? "AND c.contact_type = 'lead'" : "";
   // company_ids (array, new) takes priority; company_id (single, legacy) is
   // still honored for backwards compatibility with existing callers.
-  const filterCompanyIds: string[] = Array.isArray(audience?.company_ids)
-    ? audience.company_ids.filter((x: any) => typeof x === "string" && x.trim()).map((x: string) => x.trim())
-    : audience?.company_id
-      ? [String(audience.company_id).trim()].filter(Boolean)
-      : [];
+  const filterCompanyIds = multiFilter(audience?.company_ids, audience?.company_id);
+  const uploadedEmails = mode === "uploaded" ? normalizeUploadedEmails(audience?.emails) : [];
+  const includeCompanyEmails = audience?.include_company_emails === true;
   const explicitIds: string[] = Array.isArray(audience?.contact_ids)
     ? audience.contact_ids.filter((x: any) => typeof x === "string" && x)
     : [];
 
   // Resolve recipient set — same SQL as POST /api/campaigns.
-  let recipients: Array<{ email: string }> = [];
+  let recipients: Array<{ email: string; company_id?: string | null }> = [];
   if (mode === "selected") {
     if (!explicitIds.length) {
       return NextResponse.json({ total: 0, willSend: 0, suppressed: 0, suppressedEmails: [] });
     }
     const ph = explicitIds.map(() => "?").join(",");
     const sql = callerIsStaff
-      ? `SELECT DISTINCT c.email FROM contacts c
+      ? `SELECT DISTINCT c.email, c.company_id FROM contacts c
           WHERE c.id IN (${ph}) ${leadClause} AND c.email IS NOT NULL AND c.email <> ''`
-      : `SELECT DISTINCT c.email
+      : `SELECT DISTINCT c.email, c.company_id
            FROM contacts c
            JOIN unlocked_contacts_v u ON u.contact_id = c.id AND u.user_id = ?
           WHERE c.id IN (${ph}) ${leadClause} AND c.email IS NOT NULL AND c.email <> ''`;
     const params = callerIsStaff ? explicitIds : [session.id, ...explicitIds];
     const [rows] = await db.query(sql, params);
-    recipients = (rows as any[]).map((r) => ({ email: r.email }));
+    recipients = (rows as any[]).map((r) => ({ email: r.email, company_id: r.company_id }));
+  } else if (mode === "uploaded") {
+    // Already normalized + deduped; no DB lookup needed to count it.
+    recipients = uploadedEmails.map((email) => ({ email }));
   } else if (mode === "admin_all") {
     const [rows] = await db.query(
-      `SELECT email FROM contacts WHERE email IS NOT NULL AND email <> ''
+      `SELECT email, company_id FROM contacts WHERE email IS NOT NULL AND email <> ''
         ${leadsOnly ? "AND contact_type = 'lead'" : ""}`
     );
-    recipients = (rows as any[]).map((r) => ({ email: r.email }));
+    recipients = (rows as any[]).map((r) => ({ email: r.email, company_id: r.company_id }));
   } else {
     const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
     if (leadsOnly) where.push("c.contact_type = 'lead'");
@@ -81,27 +85,30 @@ export async function POST(req: Request) {
       where.push("(LOWER(c.contact_name) LIKE ? OR LOWER(c.email) LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
     }
-    if (filterCompanyIds.length === 1) {
-      where.push("c.company_id = ?");
-      params.push(filterCompanyIds[0]);
-    } else if (filterCompanyIds.length > 1) {
-      where.push(`c.company_id IN (${filterCompanyIds.map(() => "?").join(",")})`);
-      params.push(...filterCompanyIds);
-    }
-    if (filterSegment)    { where.push("co.segment = ?");   params.push(filterSegment); }
-    if (filterCountry)    { where.push("co.country = ?");   params.push(filterCountry); }
+    pushInClause(where, params, "c.company_id", filterCompanyIds);
+    pushInClause(where, params, "co.segment", filterSegments);
+    pushInClause(where, params, "co.country", filterCountries);
     if (filterDepartment) { where.push("c.department = ?"); params.push(filterDepartment); }
 
     const fromParts: string[] = ["contacts c"];
     if (!callerIsStaff) fromParts.push("JOIN unlocked_contacts_v u ON u.contact_id = c.id");
-    if (filterSegment || filterCountry) {
+    if (filterSegments.length || filterCountries.length) {
       fromParts.push("LEFT JOIN companies co ON co.company_id = c.company_id");
     }
     const [rows] = await db.query(
-      `SELECT DISTINCT c.email FROM ${fromParts.join(" ")} WHERE ${where.join(" AND ")}`,
+      `SELECT DISTINCT c.email, c.company_id FROM ${fromParts.join(" ")} WHERE ${where.join(" AND ")}`,
       params
     );
-    recipients = (rows as any[]).map((r) => ({ email: r.email }));
+    recipients = (rows as any[]).map((r) => ({ email: r.email, company_id: r.company_id }));
+  }
+
+  // Same company-inbox append as POST /api/campaigns, so the previewed count
+  // matches what the send actually produces.
+  if (includeCompanyEmails && recipients.length) {
+    const inboxes = await companyInboxes(
+      recipients.map((r) => r.company_id).filter(Boolean) as string[]
+    );
+    for (const email of inboxes) recipients.push({ email });
   }
 
   // Mirror the dedupe logic of POST /api/campaigns so the counts shown to

@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import PhoneInput from "@/components/PhoneInput";
 import * as XLSX from "xlsx";
 import { ArrowLeft, Plus, Trash2, Save, Send, Upload, FileSpreadsheet, FileText, Eye } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
@@ -35,8 +36,10 @@ const emptyCustomer = {
   company_id: "",
   name: "",
   email: "",
+  phone: "",
   company: "",
   gstin: "",
+  pan: "",
   address: "",
 };
 
@@ -137,13 +140,14 @@ export default function NewInvoice() {
       setContactQuery(contactLabel(c));
       setContactOpen(false);
       setCustomer({
+        ...emptyCustomer,
         contact_id: c.id,
         company_id: c.company_id || "",
         name: c.name || "",
         email: c.email || "",
+        // Contacts carry a phone; prefill it so the invoice doesn't need it re-typed.
+        phone: (c as any).phone || "",
         company: c.company || "",
-        gstin: "",
-        address: "",
       });
     },
     [contactLabel]
@@ -243,8 +247,10 @@ export default function NewInvoice() {
       customer_company_id: customer.company_id || null,
       customer_name: customer.name || null,
       customer_email: customer.email || null,
+      customer_phone: customer.phone || null,
       customer_company: customer.company || null,
       customer_gstin: customer.gstin || null,
+      customer_pan: customer.pan || null,
       customer_address: customer.address || null,
       currency,
       issue_date: issueDate,
@@ -306,8 +312,10 @@ export default function NewInvoice() {
     fd.append("customer_company_id", customer.company_id || "");
     fd.append("customer_name", customer.name || "");
     fd.append("customer_email", customer.email || "");
+    fd.append("customer_phone", customer.phone || "");
     fd.append("customer_company", customer.company || "");
     fd.append("customer_gstin", customer.gstin || "");
+    fd.append("customer_pan", customer.pan || "");
     fd.append("customer_address", customer.address || "");
     fd.append("currency", currency);
     fd.append("issue_date", issueDate);
@@ -543,8 +551,19 @@ export default function NewInvoice() {
           <input className={inputCls} type="email" value={customer.email} onChange={(e) => setCustomer({ ...customer, email: e.target.value })} placeholder="buyer@acme.com" />
         </div>
         <div>
+          <label className={labelCls}>Phone (optional)</label>
+          <PhoneInput
+            value={customer.phone}
+            onChange={(next) => setCustomer({ ...customer, phone: next })}
+          />
+        </div>
+        <div>
           <label className={labelCls}>GSTIN (optional)</label>
           <input className={inputCls} value={customer.gstin} onChange={(e) => setCustomer({ ...customer, gstin: e.target.value })} placeholder="29ABCDE1234F1Z5" />
+        </div>
+        <div>
+          <label className={labelCls}>PAN (optional)</label>
+          <input className={inputCls} value={customer.pan} onChange={(e) => setCustomer({ ...customer, pan: e.target.value.toUpperCase() })} placeholder="ABCDE1234F" maxLength={10} />
         </div>
         <div className="md:col-span-2">
           <label className={labelCls}>Billing address (optional)</label>

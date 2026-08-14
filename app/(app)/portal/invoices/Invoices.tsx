@@ -185,7 +185,14 @@ export default function InvoicesPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-gray-200">
+                      {/* Company AND contact name. This used to be
+                          `company || name`, so whenever a company was set the
+                          person's name was hidden entirely — the invoice PDF
+                          shows both, and this column disagreed with it. */}
                       <div>{r.customer_company || r.customer_name || "—"}</div>
+                      {r.customer_company && r.customer_name && (
+                        <div className="text-xs text-gray-400">{r.customer_name}</div>
+                      )}
                       {r.customer_email && (
                         <div className="text-xs text-gray-500">{r.customer_email}</div>
                       )}

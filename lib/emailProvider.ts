@@ -1,5 +1,7 @@
 type SendArgs = {
-  to: string;
+  /** One address, or several — invoice sends go to billing plus procurement.
+   *  Every provider path below normalises this with toList(). */
+  to: string | string[];
   subject: string;
   html: string;
   fromEmail: string;
@@ -10,6 +12,10 @@ type SendArgs = {
    *  the List-Unsubscribe + List-Unsubscribe-Post: One-Click headers required
    *  by Gmail/Yahoo for bulk senders since Feb 2024. */
   unsubscribeUrl?: string;
+  /** Explicit Reply-To. Used when the From address had to differ from the
+   *  address the message claims to be from (e.g. an invoice whose seller
+   *  address isn't a verified sender) so replies still reach the right inbox. */
+  replyTo?: string;
   /** Campaign id, surfaced in the Feedback-ID header so Gmail Postmaster
    *  Tools can break out reputation per-campaign.  Optional but recommended. */
   campaignId?: string;
@@ -75,6 +81,14 @@ function logDeliverabilityWarnings(args: SendArgs) {
   }
 }
 
+/** Normalise the one-or-many recipient field to a clean, deduped array. */
+function toList(to: string | string[]): string[] {
+  const raw = Array.isArray(to) ? to : String(to || "").split(/[,;]/);
+  return Array.from(
+    new Set(raw.map((t) => t.trim()).filter(Boolean).map((t) => t.toLowerCase()))
+  );
+}
+
 export type Provider = "ses" | "resend" | "dev";
 
 /**
@@ -126,7 +140,7 @@ export async function sendEmail(args: SendArgs): Promise<{ id: string | null }> 
 }
 
 // ---------- AWS SES v2 ----------
-async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments }: SendArgs) {
+async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments, replyTo: replyToArg }: SendArgs) {
   const { SESv2Client, SendEmailCommand } = await import("@aws-sdk/client-sesv2");
   const ses = new SESv2Client({
     region: process.env.SES_REGION || process.env.AWS_REGION || "us-east-1",
@@ -160,7 +174,7 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
     const fromDomain = (fromEmail.split("@")[1] || "leadsentra.local").toLowerCase();
     const messageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${fromDomain}>`;
     // For a reply, route follow-ups back to the sending mailbox itself.
-    const replyTo = isThreadedReply ? fromEmail : process.env.EMAIL_REPLY_TO || fromEmail;
+    const replyTo = replyToArg || (isThreadedReply ? fromEmail : process.env.EMAIL_REPLY_TO || fromEmail);
     // Feedback-ID: Gmail Postmaster Tools breaks down reputation per-campaign
     // using this header.  Format recommended by Google: <campaign>:<customer>:<type>:<sender>
     const feedbackId = [
@@ -172,7 +186,7 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
 
     const lines: string[] = [];
     lines.push(`From: ${fromHeader}`);
-    lines.push(`To: ${to}`);
+    lines.push(`To: ${toList(to).join(", ")}`);
     lines.push(`Reply-To: ${replyTo}`);
     lines.push(`Subject: ${encodeMimeHeader(subject)}`);
     lines.push(`Message-ID: ${messageId}`);
@@ -259,7 +273,7 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
   const resp = await ses.send(
     new SendEmailCommand({
       FromEmailAddress: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
-      Destination: { ToAddresses: [to] },
+      Destination: { ToAddresses: toList(to) },
       Content: { Simple: { Subject: { Data: subject }, Body: body } },
       ConfigurationSetName: process.env.SES_CONFIG_SET || undefined,
     })
@@ -330,14 +344,14 @@ function toQuotedPrintable(input: string): string {
 }
 
 // ---------- Resend ----------
-async function sendWithResend({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments }: SendArgs) {
+async function sendWithResend({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments, replyTo: replyToArg }: SendArgs) {
   const { Resend } = await import("resend");
   const resend = new Resend(process.env.RESEND_API_KEY!);
   const isThreadedReply = !!(inReplyTo || references);
   const isBulk = !!unsubscribeUrl || (!!campaignId && !isThreadedReply);
   const payload: any = {
     from: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
-    to,
+    to: toList(to),
     subject,
     html,
   };
@@ -353,7 +367,7 @@ async function sendWithResend({ to, subject, html, fromEmail, fromName, text, un
   }
   // For a reply, route follow-ups back to the sending mailbox.  Otherwise keep
   // the campaign behaviour (monitored reply box if configured).
-  payload.reply_to = isThreadedReply ? fromEmail : process.env.EMAIL_REPLY_TO || fromEmail;
+  payload.reply_to = replyToArg || (isThreadedReply ? fromEmail : process.env.EMAIL_REPLY_TO || fromEmail);
 
   const fromDomain = (fromEmail.split("@")[1] || "leadsentra.local").toLowerCase();
   const headers: Record<string, string> = {

@@ -49,7 +49,9 @@ export type InvoicePdfData = {
   customer_company?: string | null;
   customer_name?: string | null;
   customer_email?: string | null;
+  customer_phone?: string | null;
   customer_gstin?: string | null;
+  customer_pan?: string | null;
   customer_address?: string | null;
 
   items: InvoicePdfItem[];
@@ -217,21 +219,48 @@ export async function generateInvoicePdf(
     ["Delivery", data.delivery_terms || "-"],
   ];
 
+  // Who the invoice is from.
+  //
+  // seller_name falls back to the account's login email when no billing profile
+  // name is set (see invoiceCreate), so the heading could end up printing the
+  // email address as the company — and then printing it a second time on the
+  // "Email :" line, and a third time under "For …". Prefer a value that is
+  // actually a name; only fall back to the email when there is nothing else,
+  // and in that case don't repeat it.
+  const isEmailish = (v: string) => /\S+@\S+\.\S+/.test(v);
+  const sellerEmail = String(data.seller_email || "").trim();
+  const sellerIdentity =
+    [data.seller_company, data.seller_name]
+      .map((v) => String(v || "").trim())
+      .find((v) => v && !isEmailish(v)) || sellerEmail;
+
   // Pre-measure both columns to size the band.
   const sellerLines: Array<{ s: string; bold?: boolean; size?: number }> = [];
   sellerLines.push({ s: "Communication Address :", size: 7.5 });
-  sellerLines.push({ s: data.seller_company || data.seller_name || "", bold: true, size: 9.5 });
+  if (sellerIdentity) sellerLines.push({ s: sellerIdentity, bold: true, size: 9.5 });
   for (const piece of String(data.seller_address || "").split(/\r?\n/)) {
     if (piece.trim()) for (const wl of wrap(piece, font, 8, width * 0.5 - 12)) sellerLines.push({ s: wl });
   }
   if (data.seller_gstin) sellerLines.push({ s: `GSTIN : ${data.seller_gstin}` });
-  if (data.seller_email) sellerLines.push({ s: `Email : ${data.seller_email}` });
+  // Suppressed when the heading above already IS the email.
+  if (sellerEmail && sellerEmail !== sellerIdentity) {
+    sellerLines.push({ s: `Email : ${sellerEmail}` });
+  }
 
   const metaRowH = 14;
-  const metaH = meta.reduce((acc, [, v]) => {
-    const vl = wrap(v, font, 8, right - metaValX - 4).length;
-    return acc + Math.max(metaRowH, vl * 10 + 4);
-  }, 0);
+  // The label column is fixed-width, and "Mode/Terms of Payment" measures
+  // 80.9pt at 7.5pt against the 80pt available — it ran into the vertical rule
+  // separating label from value. Wrap the label instead of widening the column,
+  // which would steal width from payment terms (already the longest value).
+  const metaLabelW = metaValX - 6 - metaLabelX - 2;
+  const metaRows = meta.map(([k, v]) => ({
+    labelLines: wrap(k, font, 7.5, metaLabelW),
+    valueLines: wrap(v, font, 8, right - metaValX - 4),
+  }));
+  const metaH = metaRows.reduce(
+    (acc, r) => acc + Math.max(metaRowH, r.valueLines.length * 10 + 4, r.labelLines.length * 10 + 4),
+    0
+  );
   const sellerH = sellerLines.reduce((acc, l) => acc + (l.size ? l.size + 3.5 : 11.5), 6);
   const bandH = Math.max(metaH, sellerH) + 6;
 
@@ -246,13 +275,12 @@ export async function generateInvoicePdf(
   }
   // meta grid (right)
   let my = y;
-  for (const [k, v] of meta) {
-    const vlines = wrap(v, font, 8, right - metaValX - 4);
-    const rh = Math.max(metaRowH, vlines.length * 10 + 4);
+  for (const { labelLines, valueLines } of metaRows) {
+    const rh = Math.max(metaRowH, valueLines.length * 10 + 4, labelLines.length * 10 + 4);
     hline(midX, right, my - rh, 0.5);
     vline(metaValX - 6, my - rh, my, 0.5);
-    txt(k, metaLabelX, my - 10, { size: 7.5, color: MUTED });
-    vlines.forEach((vl, i) => txt(vl, metaValX, my - 10 - i * 10, { size: 8 }));
+    labelLines.forEach((ll, i) => txt(ll, metaLabelX, my - 10 - i * 10, { size: 7.5, color: MUTED }));
+    valueLines.forEach((vl, i) => txt(vl, metaValX, my - 10 - i * 10, { size: 8 }));
     my -= rh;
   }
   y -= bandH;
@@ -266,6 +294,10 @@ export async function generateInvoicePdf(
     if (piece.trim()) for (const wl of wrap(piece, font, 8, width * 0.5 - 12)) custLines.push({ s: wl });
   }
   if (data.customer_gstin) custLines.push({ s: `GSTIN : ${data.customer_gstin}` });
+  // The customer's own PAN and phone — previously there was nowhere to put
+  // these, so they were being typed into the address block to reach the page.
+  if (data.customer_pan) custLines.push({ s: `PAN : ${data.customer_pan}` });
+  if (data.customer_phone) custLines.push({ s: `Phone : ${data.customer_phone}` });
   if (data.customer_email) custLines.push({ s: `Email : ${data.customer_email}` });
 
   const bank: Array<[string, string]> = [];
@@ -419,7 +451,9 @@ export async function generateInvoicePdf(
   txt("Declaration:", left + 6, y - 11, { size: 8, bold: true });
   declLines.forEach((dl, i) => txt(dl, left + 6, y - 23 - i * 10, { size: 7.5, color: MUTED }));
 
-  txt(`For ${data.seller_company || data.seller_name || ""}`, metaLabelX, y - 11, { size: 8.5, bold: true });
+  // Same identity as the header block, so the signatory line can't disagree
+  // with it (or print a bare "For " when only an email is on file).
+  txt(`For ${sellerIdentity}`, metaLabelX, y - 11, { size: 8.5, bold: true });
   if (signature) {
     const sw = 90;
     const sh = Math.min((signature.height / signature.width) * sw, 34);

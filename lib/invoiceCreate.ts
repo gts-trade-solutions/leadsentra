@@ -48,8 +48,10 @@ export async function createProformaInvoice(
     company_id: s(body.customer_company_id, 36),
     name: s(body.customer_name),
     email: s(body.customer_email),
+    phone: s(body.customer_phone, 64),
     company: s(body.customer_company),
     gstin: s(body.customer_gstin, 32),
+    pan: s(body.customer_pan, 32),
     address: s(body.customer_address, 2000),
   };
   if (!customer.name && !customer.company) {
@@ -118,7 +120,7 @@ export async function createProformaInvoice(
       `INSERT INTO proforma_invoices
         (id, user_id, invoice_number, subject, status, source,
          customer_contact_id, customer_company_id, customer_name, customer_email,
-         customer_company, customer_gstin, customer_address,
+         customer_phone, customer_company, customer_gstin, customer_pan, customer_address,
          seller_name, seller_email, seller_phone, seller_company, seller_gstin, seller_pan, seller_address,
          ref, payment_terms, delivery_terms,
          bank_name, bank_account, bank_branch, bank_ifsc,
@@ -128,7 +130,7 @@ export async function createProformaInvoice(
          notes, terms)
        VALUES (?, ?, ?, ?, 'draft', 'generated',
          ?, ?, ?, ?,
-         ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?, ?, ?,
@@ -139,7 +141,7 @@ export async function createProformaInvoice(
       [
         id, userId, invoiceNumber, subject,
         customer.contact_id, customer.company_id, customer.name, customer.email,
-        customer.company, customer.gstin, customer.address,
+        customer.phone, customer.company, customer.gstin, customer.pan, customer.address,
         seller.name, seller.email, seller.phone, seller.company, seller.gstin, seller.pan, seller.address,
         ref, paymentTerms, deliveryTerms,
         bank.name, bank.account, bank.branch, bank.ifsc,

@@ -35,8 +35,10 @@ export type InvoiceRecord = {
   customer_company_id: string | null;
   customer_name: string | null;
   customer_email: string | null;
+  customer_phone: string | null;
   customer_company: string | null;
   customer_gstin: string | null;
+  customer_pan: string | null;
   customer_address: string | null;
   seller_name: string | null;
   seller_email: string | null;
@@ -110,8 +112,10 @@ function mapInvoice(row: any): InvoiceRecord {
     customer_company_id: row.customer_company_id,
     customer_name: row.customer_name,
     customer_email: row.customer_email,
+    customer_phone: row.customer_phone,
     customer_company: row.customer_company,
     customer_gstin: row.customer_gstin,
+    customer_pan: row.customer_pan,
     customer_address: row.customer_address,
     seller_name: row.seller_name,
     seller_email: row.seller_email,
@@ -205,7 +209,9 @@ export function toPdfData(invoice: InvoiceRecord, items: InvoiceItemRecord[]): I
     customer_company: invoice.customer_company,
     customer_name: invoice.customer_name,
     customer_email: invoice.customer_email,
+    customer_phone: invoice.customer_phone,
     customer_gstin: invoice.customer_gstin,
+    customer_pan: invoice.customer_pan,
     customer_address: invoice.customer_address,
     items: items.map((it) => ({
       part_no: it.part_no,

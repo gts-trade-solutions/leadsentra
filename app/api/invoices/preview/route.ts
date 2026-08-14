@@ -88,7 +88,9 @@ export async function POST(req: Request) {
     customer_company: s(body.customer_company),
     customer_name: s(body.customer_name),
     customer_email: s(body.customer_email),
+    customer_phone: s(body.customer_phone, 64),
     customer_gstin: s(body.customer_gstin, 32),
+    customer_pan: s(body.customer_pan, 32),
     customer_address: s(body.customer_address, 2000),
 
     items: items.map((it) => ({

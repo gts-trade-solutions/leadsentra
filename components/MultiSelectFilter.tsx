@@ -13,6 +13,13 @@ import { Check, ChevronDown, Search, X } from "lucide-react";
  * Selecting nothing means "all", which keeps the empty state identical to the
  * old behaviour.
  */
+/** An option whose stored value differs from what the user reads — e.g. a
+ *  company, filtered by `company_id` but displayed by name. */
+export type MultiSelectOption = { value: string; label: string };
+
+/** Callers may pass plain strings (value === label) or {value,label} pairs. */
+export type MultiSelectOptionInput = string | MultiSelectOption;
+
 export default function MultiSelectFilter({
   label,
   options,
@@ -23,7 +30,7 @@ export default function MultiSelectFilter({
   id,
 }: {
   label: string;
-  options: string[];
+  options: MultiSelectOptionInput[];
   selected: string[];
   onChange: (next: string[]) => void;
   placeholder?: string;
@@ -34,6 +41,13 @@ export default function MultiSelectFilter({
   const [query, setQuery] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Normalize both shapes to {value,label} once, so the search/toggle/summary
+  // logic below never has to care which form the caller used.
+  const items: MultiSelectOption[] = useMemo(
+    () => options.map((o) => (typeof o === "string" ? { value: o, label: o } : o)),
+    [options]
+  );
 
   // Close on outside click / Escape.
   useEffect(() => {
@@ -59,15 +73,15 @@ export default function MultiSelectFilter({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter((o) => o.toLowerCase().includes(q));
-  }, [options, query]);
+    if (!q) return items;
+    return items.filter((o) => o.label.toLowerCase().includes(q));
+  }, [items, query]);
 
   // Selected values that no longer exist in `options` (e.g. the row they came
   // from was filtered out) still need to be togglable, so show them on top.
   const orphans = useMemo(
-    () => selected.filter((s) => !options.includes(s)),
-    [selected, options]
+    () => selected.filter((s) => !items.some((o) => o.value === s)),
+    [selected, items]
   );
 
   const toggle = (value: string) => {
@@ -80,7 +94,7 @@ export default function MultiSelectFilter({
     selected.length === 0
       ? placeholder
       : selected.length === 1
-      ? selected[0]
+      ? items.find((o) => o.value === selected[0])?.label ?? selected[0]
       : `${selected.length} selected`;
 
   return (
@@ -127,16 +141,17 @@ export default function MultiSelectFilter({
 
           <div className="max-h-64 overflow-y-auto py-1">
             {orphans.map((value) => (
-              <Option key={`orphan-${value}`} value={value} checked onToggle={toggle} muted />
+              <Option key={`orphan-${value}`} value={value} label={value} checked onToggle={toggle} muted />
             ))}
             {filtered.length === 0 && orphans.length === 0 ? (
               <div className="px-3 py-2 text-sm text-gray-500">No matches</div>
             ) : (
-              filtered.map((value) => (
+              filtered.map((o) => (
                 <Option
-                  key={value}
-                  value={value}
-                  checked={selected.includes(value)}
+                  key={o.value}
+                  value={o.value}
+                  label={o.label}
+                  checked={selected.includes(o.value)}
                   onToggle={toggle}
                 />
               ))
@@ -153,7 +168,9 @@ export default function MultiSelectFilter({
             </button>
             <button
               type="button"
-              onClick={() => onChange(Array.from(new Set([...selected, ...filtered])))}
+              onClick={() =>
+                onChange(Array.from(new Set([...selected, ...filtered.map((o) => o.value)])))
+              }
               className="text-xs text-gray-400 hover:text-emerald-400 px-2 py-1"
             >
               Select {query.trim() ? "matches" : "all"}
@@ -167,11 +184,13 @@ export default function MultiSelectFilter({
 
 function Option({
   value,
+  label,
   checked,
   onToggle,
   muted,
 }: {
   value: string;
+  label: string;
   checked: boolean;
   onToggle: (v: string) => void;
   muted?: boolean;
@@ -192,7 +211,7 @@ function Option({
         {checked && <Check className="w-3 h-3 text-white" />}
       </span>
       <span className={`truncate ${muted ? "text-gray-400 italic" : "text-gray-200"}`}>
-        {value}
+        {label}
       </span>
     </button>
   );

@@ -20,7 +20,8 @@ export async function GET(
 
   const [companyRows] = await db.execute(
     `SELECT company_id, company_name, legal_name, trading_name, company_type, segment, size, website,
-            head_office_address, city_regency, country, postal_code, phone_main, email_general,
+            head_office_address, city_regency, country, postal_code, phone_main, phone_main_2, phone_main_3,
+            email_general, email_general_2, email_general_3,
             linkedin, facebook_url, instagram_url, notes, company_profile, financial_reports, forecast_value, meta
        FROM companies
       WHERE company_id = ?

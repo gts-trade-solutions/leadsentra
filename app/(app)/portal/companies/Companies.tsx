@@ -405,6 +405,20 @@ export default function CompaniesPage() {
     size: "",
     region: "",
     phone: "",
+    // Additional contact points beyond the main switchboard / general inbox.
+    phone_main_2: "",
+    phone_main_3: "",
+    email_general: "",
+    email_general_2: "",
+    email_general_3: "",
+    legal_name: "",
+    trading_name: "",
+    head_office_address: "",
+    postal_code: "",
+    company_profile: "",
+    financial_reports: "",
+    forecast_value: "",
+    notes: "",
     website: "",
     linkedin: "",
     facebook_url: "",
@@ -430,6 +444,19 @@ export default function CompaniesPage() {
       size: r.size || "",
       region: r.city_regency || "",
       phone: (r as any).phone || "",
+      phone_main_2: "",
+      phone_main_3: "",
+      email_general: "",
+      email_general_2: "",
+      email_general_3: "",
+      legal_name: "",
+      trading_name: "",
+      head_office_address: "",
+      postal_code: "",
+      company_profile: "",
+      financial_reports: "",
+      forecast_value: "",
+      notes: "",
       website: "",
       linkedin: "",
       facebook_url: "",
@@ -455,6 +482,19 @@ export default function CompaniesPage() {
           size: c.size || f.size,
           region: c.city_regency || f.region,
           phone: c.phone_main || f.phone,
+          phone_main_2: c.phone_main_2 || f.phone_main_2,
+          phone_main_3: c.phone_main_3 || f.phone_main_3,
+          email_general: c.email_general || f.email_general,
+          email_general_2: c.email_general_2 || f.email_general_2,
+          email_general_3: c.email_general_3 || f.email_general_3,
+          legal_name: c.legal_name || f.legal_name,
+          trading_name: c.trading_name || f.trading_name,
+          head_office_address: c.head_office_address || f.head_office_address,
+          postal_code: c.postal_code || f.postal_code,
+          company_profile: c.company_profile || f.company_profile,
+          financial_reports: c.financial_reports || f.financial_reports,
+          forecast_value: c.forecast_value != null ? String(c.forecast_value) : f.forecast_value,
+          notes: c.notes || f.notes,
           website: c.website || f.website,
           linkedin: c.linkedin || f.linkedin,
           facebook_url: c.facebook_url || f.facebook_url,
@@ -484,6 +524,19 @@ export default function CompaniesPage() {
           size: editCompanyForm.size.trim(),
           region: editCompanyForm.region.trim(),
           phone: editCompanyForm.phone.trim(),
+          phone_main_2: editCompanyForm.phone_main_2.trim(),
+          phone_main_3: editCompanyForm.phone_main_3.trim(),
+          email_general: editCompanyForm.email_general.trim(),
+          email_general_2: editCompanyForm.email_general_2.trim(),
+          email_general_3: editCompanyForm.email_general_3.trim(),
+          legal_name: editCompanyForm.legal_name.trim(),
+          trading_name: editCompanyForm.trading_name.trim(),
+          head_office_address: editCompanyForm.head_office_address.trim(),
+          postal_code: editCompanyForm.postal_code.trim(),
+          company_profile: editCompanyForm.company_profile.trim(),
+          financial_reports: editCompanyForm.financial_reports.trim(),
+          forecast_value: editCompanyForm.forecast_value.trim(),
+          notes: editCompanyForm.notes.trim(),
           website: editCompanyForm.website.trim(),
           linkedin: editCompanyForm.linkedin.trim(),
           facebook_url: editCompanyForm.facebook_url.trim(),
@@ -676,7 +729,10 @@ export default function CompaniesPage() {
 
       const s = norm(debouncedSearch);
       if (!s) return true;
-      const hay = [r.name, r.companyType, r.size, r.country, r.location]
+      // company_id is included so pasting a code from an export, an invoice or
+      // a support thread finds the row — it's the identifier people actually
+      // quote to each other, and searching it used to return nothing.
+      const hay = [r.company_id, r.name, r.companyType, r.size, r.country, r.location]
         .map(norm)
         .join("|");
       return includesI(hay, s);
@@ -854,10 +910,32 @@ export default function CompaniesPage() {
     }
   };
 
-  // export
+  /** Are any filters narrowing the table right now? Drives the Export label. */
+  const filtersActive =
+    !!search.trim() ||
+    filters.companyType.length > 0 ||
+    filters.country.length > 0 ||
+    filters.segment.length > 0 ||
+    !!filters.size ||
+    !!filters.location ||
+    !!filters.dateFrom ||
+    !!filters.dateTo;
+
+  // export — the server re-runs these filters in SQL, so a filtered download
+  // covers every match, not just the page the browser is holding.
   const onExportClick = () => {
+    const p = new URLSearchParams();
+    if (search.trim()) p.set("q", search.trim());
+    filters.companyType.forEach((t) => p.append("type", t));
+    filters.country.forEach((c) => p.append("country", c));
+    filters.segment.forEach((s) => p.append("segment", s));
+    if (filters.size) p.set("size", filters.size);
+    if (filters.location) p.set("location", filters.location);
+    if (filters.dateFrom) p.set("from", filters.dateFrom);
+    if (filters.dateTo) p.set("to", filters.dateTo);
+    const qs = p.toString();
     // Streamed download — keep it simple, just hit the endpoint
-    window.location.href = "/api/companies/export";
+    window.location.href = `/api/companies/export${qs ? `?${qs}` : ""}`;
   };
 
   // open company details
@@ -1346,10 +1424,14 @@ export default function CompaniesPage() {
         <button
           onClick={onExportClick}
           className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium transition-colors"
-          title="Export your companies as CSV"
+          title={
+            filtersActive
+              ? `Export the ${rows.length.toLocaleString()} companies matching your filters, as CSV`
+              : "Export all your companies as CSV"
+          }
         >
           <Download className="w-4 h-4" />
-          Export
+          {filtersActive ? "Export filtered" : "Export"}
         </button>
 
         {/* Bulk Delete — admin only. Backend also rejects non-admin callers. */}
@@ -1400,7 +1482,7 @@ export default function CompaniesPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search company, type, size, or location…"
+              placeholder="Search company ID, name, type, size, or location…"
               aria-label="Search companies"
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 hover:border-gray-600 transition-colors"
             />
@@ -1881,12 +1963,68 @@ export default function CompaniesPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Phone</label>
+                <label className="text-xs text-gray-400 block mb-1">Phone (main)</label>
                 <PhoneInput
                   value={editCompanyForm.phone}
                   onChange={(next) => setEditCompanyForm((f) => ({ ...f, phone: next }))}
                 />
               </div>
+
+              {/* Additional contact points. Collapsed by default — most
+                  companies need only the main pair, and the extras used to be
+                  typed into the notes field where nothing could use them. */}
+              <details className="md:col-span-2 rounded-lg border border-gray-800 bg-gray-900/40">
+                <summary className="cursor-pointer select-none px-3 py-2 text-sm text-gray-300 hover:text-white">
+                  More emails &amp; phone numbers
+                </summary>
+                <div className="px-3 pb-3 grid md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Email (general)</label>
+                    <input
+                      type="email"
+                      value={editCompanyForm.email_general}
+                      onChange={(e) => setEditCompanyForm((f) => ({ ...f, email_general: e.target.value }))}
+                      placeholder="info@company.com"
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Phone 2</label>
+                    <PhoneInput
+                      value={editCompanyForm.phone_main_2}
+                      onChange={(next) => setEditCompanyForm((f) => ({ ...f, phone_main_2: next }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Email 2</label>
+                    <input
+                      type="email"
+                      value={editCompanyForm.email_general_2}
+                      onChange={(e) => setEditCompanyForm((f) => ({ ...f, email_general_2: e.target.value }))}
+                      placeholder="sales@company.com"
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Phone 3</label>
+                    <PhoneInput
+                      value={editCompanyForm.phone_main_3}
+                      onChange={(next) => setEditCompanyForm((f) => ({ ...f, phone_main_3: next }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Email 3</label>
+                    <input
+                      type="email"
+                      value={editCompanyForm.email_general_3}
+                      onChange={(e) => setEditCompanyForm((f) => ({ ...f, email_general_3: e.target.value }))}
+                      placeholder="support@company.com"
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                    />
+                  </div>
+                </div>
+              </details>
+
               <div className="md:col-span-2">
                 <label className="text-xs text-gray-400 block mb-1">Website</label>
                 <input
@@ -1916,6 +2054,85 @@ export default function CompaniesPage() {
                 <input
                   value={editCompanyForm.instagram_url}
                   onChange={(e) => setEditCompanyForm((f) => ({ ...f, instagram_url: e.target.value }))}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              {/* The rest of what the Company Details modal shows. These were
+                  readable there but had no field here, so correcting any of
+                  them meant a re-import. */}
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Legal name</label>
+                <input
+                  value={editCompanyForm.legal_name}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, legal_name: e.target.value }))}
+                  placeholder="Registered entity name"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Trading name</label>
+                <input
+                  value={editCompanyForm.trading_name}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, trading_name: e.target.value }))}
+                  placeholder="Name used commercially"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Head office address</label>
+                <textarea
+                  rows={2}
+                  value={editCompanyForm.head_office_address}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, head_office_address: e.target.value }))}
+                  placeholder="Street, city, state"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Postal code</label>
+                <input
+                  value={editCompanyForm.postal_code}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, postal_code: e.target.value }))}
+                  placeholder="e.g. 600002"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Company profile</label>
+                <textarea
+                  rows={3}
+                  value={editCompanyForm.company_profile}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, company_profile: e.target.value }))}
+                  placeholder="What this company does"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Financial reports</label>
+                <textarea
+                  rows={2}
+                  value={editCompanyForm.financial_reports}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, financial_reports: e.target.value }))}
+                  placeholder="Link or note"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Forecast value</label>
+                <input
+                  value={editCompanyForm.forecast_value}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, forecast_value: e.target.value }))}
+                  placeholder="e.g. 250000"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-400 block mb-1">Notes</label>
+                <textarea
+                  rows={2}
+                  value={editCompanyForm.notes}
+                  onChange={(e) => setEditCompanyForm((f) => ({ ...f, notes: e.target.value }))}
+                  placeholder="Internal notes — never shown to the company"
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300"
                 />
               </div>

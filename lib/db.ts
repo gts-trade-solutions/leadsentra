@@ -18,6 +18,11 @@ export const db =
     connectionLimit: 10,
     namedPlaceholders: false,
     dateStrings: false,
+    // Pinned rather than inherited from the server. mysql2's own default is
+    // utf8mb3, which cannot represent 4-byte characters (emoji, some CJK), and
+    // a server configured for latin1 would silently replace anything it can't
+    // map with "?" — the failure that corrupts non-Latin names irreversibly.
+    charset: "utf8mb4",
   });
 
 if (process.env.NODE_ENV !== "production") globalForDb.__mysqlPool = db;

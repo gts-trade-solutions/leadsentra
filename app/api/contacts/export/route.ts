@@ -151,6 +151,12 @@ async function handle(qs: URLSearchParams) {
   inList("co.segment", list("segment"));
   inList("COALESCE(co.company_type, co.industry)", list("type"));
 
+  // Lead vs normal. Only an explicit 'lead' counts as a lead — same predicate
+  // as the Type badge, the counter, and the campaign audience's leads_only.
+  const kind = one("kind").toLowerCase();
+  if (kind === "lead") where.push("c.contact_type = 'lead'");
+  else if (kind === "normal") where.push("COALESCE(c.contact_type, 'normal') <> 'lead'");
+
   const from = one("from");
   const to = one("to");
   if (from) { where.push("c.created_at >= ?"); params.push(`${from} 00:00:00`); }
@@ -224,7 +230,10 @@ async function handle(qs: URLSearchParams) {
   for (const r of rows as any[]) {
     out.push(COLUMNS.map((h) => csvEscape((r as any)[h])).join(","));
   }
-  const body = out.join("\n");
+  // UTF-8 BOM + CRLF so Excel on Windows decodes this as UTF-8 rather than the
+  // system ANSI codepage. Without it, accented and non-Latin names open
+  // corrupted and are written back as "?" if the file is re-saved.
+  const body = "﻿" + out.join("\r\n");
   const ts = new Date().toISOString().slice(0, 10);
 
   return new Response(body, {

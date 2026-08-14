@@ -13,6 +13,9 @@ import {
   AlertTriangle,
   Mail,
   ShieldOff,
+  FileText,
+  Copy,
+  Check,
 } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
@@ -46,6 +49,19 @@ type CampaignSummary = {
   subject?: string | null;
 };
 
+/** The message as it went out — GET /api/campaigns/[id]/content. */
+type SentContent = {
+  subject: string | null;
+  from_email: string | null;
+  from_name: string | null;
+  recipients_count: number;
+  low_signal: boolean;
+  created_at: string;
+  html: string;
+  rendered_html: string;
+  text: string;
+};
+
 type Filter =
   | "all" | "delivered" | "opened" | "clicked"
   | "bounced" | "complained" | "not_opened" | "suppressed" | "failed";
@@ -60,6 +76,44 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
   const [search, setSearch] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [page, setPage] = useState(1);
+
+  // "What you sent" panel. Fetched once, separately from the recipients poll —
+  // the body can be a large template and there's no reason to re-ship it every
+  // 15 seconds while a send drains.
+  const [content, setContent] = useState<SentContent | null>(null);
+  const [contentOpen, setContentOpen] = useState(false);
+  const [contentView, setContentView] = useState<"preview" | "text" | "html">("preview");
+  const [copied, setCopied] = useState<"text" | "html" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${campaignId}/content`, {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!cancelled) setContent(json as SentContent);
+      } catch {
+        /* the panel is additive — tracking still works without it */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [campaignId]);
+
+  async function copy(kind: "text" | "html") {
+    const value = kind === "text" ? content?.text : content?.html;
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      toast({ variant: "destructive", title: "Couldn't copy", description: "Select the text and copy manually." });
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -200,6 +254,127 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
             icon={AlertTriangle}
           />
         </div>
+
+        {/* What you sent — the message itself, next to who received it. The
+            table shows opens and clicks; this is the thing you actually need
+            in front of you when writing the follow-up. */}
+        {content && (
+          <div className="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setContentOpen((v) => !v)}
+              aria-expanded={contentOpen}
+              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-800/50 transition-colors"
+            >
+              <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-white">What you sent</div>
+                <div className="text-xs text-gray-400 truncate">
+                  {content.subject || <em className="text-gray-500">(no subject)</em>}
+                  {content.from_email && (
+                    <span className="text-gray-500"> · from {content.from_email}</span>
+                  )}
+                </div>
+              </div>
+              <span className="text-xs text-gray-400 shrink-0">
+                {contentOpen ? "Hide ▲" : "View message ▼"}
+              </span>
+            </button>
+
+            {contentOpen && (
+              <div className="border-t border-gray-800 p-4 space-y-3">
+                <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                  <Detail label="From" value={
+                    content.from_name
+                      ? `${content.from_name} <${content.from_email ?? "—"}>`
+                      : content.from_email || "—"
+                  } />
+                  <Detail label="Subject" value={content.subject || "—"} />
+                  <Detail label="Sent" value={new Date(content.created_at).toLocaleString()} />
+                  <Detail
+                    label="Recipients"
+                    value={`${content.recipients_count.toLocaleString()}${
+                      content.low_signal ? " · Primary-inbox mode (no open/click tracking)" : ""
+                    }`}
+                  />
+                </dl>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-lg border border-gray-700 bg-gray-800 overflow-hidden text-xs">
+                    {(["preview", "text", "html"] as const).map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setContentView(v)}
+                        className={`px-3 py-1.5 transition-colors ${
+                          contentView === v
+                            ? "bg-emerald-600 text-white"
+                            : "text-gray-300 hover:bg-gray-700"
+                        }`}
+                      >
+                        {v === "preview" ? "Preview" : v === "text" ? "Plain text" : "HTML"}
+                      </button>
+                    ))}
+                  </div>
+                  {contentView !== "preview" && (
+                    <button
+                      type="button"
+                      onClick={() => copy(contentView === "text" ? "text" : "html")}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-gray-800 border border-gray-700 text-gray-200 hover:border-gray-600"
+                    >
+                      {copied === (contentView === "text" ? "text" : "html") ? (
+                        <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</>
+                      ) : (
+                        <><Copy className="w-3.5 h-3.5" /> Copy {contentView === "text" ? "text" : "HTML"}</>
+                      )}
+                    </button>
+                  )}
+                  {contentView === "text" && (
+                    <span className="text-[11px] text-gray-500">
+                      Paste this straight into a manual follow-up.
+                    </span>
+                  )}
+                </div>
+
+                {!content.rendered_html ? (
+                  <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-400">
+                    This campaign has no saved body — it was created before the
+                    message was written, or saved as an empty draft.
+                  </div>
+                ) : contentView === "preview" ? (
+                  // Sandboxed so the stored HTML can't run scripts or reach the
+                  // network from inside the portal.
+                  <div className="rounded-lg border border-gray-700 bg-white overflow-hidden">
+                    <div className="px-3 py-1.5 bg-gray-100 border-b border-gray-200 text-xs text-gray-600 flex items-center justify-between gap-2">
+                      <span className="truncate">
+                        <b>Subject:</b> {content.subject || "(none)"}
+                      </span>
+                      <span className="text-gray-500 shrink-0">
+                        From: {content.from_email || "—"}
+                      </span>
+                    </div>
+                    <iframe
+                      title="Sent message"
+                      sandbox=""
+                      srcDoc={content.rendered_html}
+                      className="w-full bg-white"
+                      style={{ height: 460, border: 0 }}
+                    />
+                  </div>
+                ) : (
+                  <pre className="rounded-lg border border-gray-800 bg-gray-950 p-3 text-xs text-gray-300 overflow-auto whitespace-pre-wrap break-words max-h-[460px]">
+                    {contentView === "text" ? content.text : content.html}
+                  </pre>
+                )}
+
+                <p className="text-[11px] text-gray-500">
+                  Tracking pixels and click-redirects are added per recipient at
+                  send time, so the preview shows the message body without them.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Secondary stats row */}
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-xs text-gray-400 flex flex-wrap gap-x-6 gap-y-1">
@@ -412,4 +587,14 @@ function fmtDate(x: string | null) {
   } catch {
     return x;
   }
+}
+
+/** One labelled line in the "What you sent" header block. */
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-2 min-w-0">
+      <dt className="text-gray-500 w-20 shrink-0">{label}</dt>
+      <dd className="text-gray-200 min-w-0 break-words">{value}</dd>
+    </div>
+  );
 }

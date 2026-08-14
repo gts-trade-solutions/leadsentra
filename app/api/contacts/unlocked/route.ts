@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
+import { pushInClause } from "@/lib/audience";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,9 +15,9 @@ export const runtime = "nodejs";
  *   limit      page size (max 500, default 50)
  *   offset     pagination offset
  *   count      "only" — return ONLY the total count, no rows
- *   segment    filter contacts whose company's `segment` equals this
- *   country    filter contacts whose company's `country` equals this
- *   company_id filter contacts under a specific company
+ *   segment    company `segment` — repeatable, or comma-separated (OR'd)
+ *   country    company `country` — repeatable, or comma-separated (OR'd)
+ *   company_id company — repeatable, or comma-separated (OR'd)
  *
  * Staff (admin/moderator) get the *entire* contacts table (no unlock filter).
  * Regular users see only contacts they've unlocked.
@@ -30,17 +31,19 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const q          = (url.searchParams.get("q") || "").trim().toLowerCase();
-  const segment    = (url.searchParams.get("segment") || "").trim();
-  const country    = (url.searchParams.get("country") || "").trim();
   const department = (url.searchParams.get("department") || "").trim();
-  // Multi-select aware: caller can pass company_id repeatedly (?company_id=a&company_id=b)
-  // or as a comma-separated single value (?company_id=a,b). Both legacy single-value
-  // callers and the new multi-select Audience picker round-trip cleanly.
-  const companyIds = url.searchParams
-    .getAll("company_id")
-    .flatMap((v) => v.split(","))
-    .map((v) => v.trim())
-    .filter(Boolean);
+  // Multi-select aware: each of these may be passed repeatedly
+  // (?segment=a&segment=b) or as one comma-separated value (?segment=a,b).
+  // Legacy single-value callers round-trip through the same path unchanged.
+  const multiParam = (name: string) =>
+    url.searchParams
+      .getAll(name)
+      .flatMap((v) => v.split(","))
+      .map((v) => v.trim())
+      .filter(Boolean);
+  const segments   = multiParam("segment");
+  const countries  = multiParam("country");
+  const companyIds = multiParam("company_id");
   const limit      = Math.min(Math.max(Number(url.searchParams.get("limit") || 50), 1), 500);
   const offset     = Math.max(Number(url.searchParams.get("offset") || 0), 0);
   const countOnly  = url.searchParams.get("count") === "only";
@@ -49,7 +52,7 @@ export async function GET(req: Request) {
   const leadsOnly  = url.searchParams.get("leads_only") === "1";
 
   const staffBypass = isStaff(session.role);
-  const needsCompaniesJoin = !!(segment || country);
+  const needsCompaniesJoin = !!(segments.length || countries.length);
 
   // ---------- WHERE ----------
   const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
@@ -65,21 +68,9 @@ export async function GET(req: Request) {
     where.push("(LOWER(c.contact_name) LIKE ? OR LOWER(c.email) LIKE ?)");
     params.push(`%${q}%`, `%${q}%`);
   }
-  if (companyIds.length === 1) {
-    where.push("c.company_id = ?");
-    params.push(companyIds[0]);
-  } else if (companyIds.length > 1) {
-    where.push(`c.company_id IN (${companyIds.map(() => "?").join(",")})`);
-    params.push(...companyIds);
-  }
-  if (segment) {
-    where.push("co.segment = ?");
-    params.push(segment);
-  }
-  if (country) {
-    where.push("co.country = ?");
-    params.push(country);
-  }
+  pushInClause(where, params, "c.company_id", companyIds);
+  pushInClause(where, params, "co.segment", segments);
+  pushInClause(where, params, "co.country", countries);
   if (department) {
     where.push("c.department = ?");
     params.push(department);

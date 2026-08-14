@@ -112,37 +112,63 @@ export async function POST(req: NextRequest) {
         const owner = (ownerRows as any[])[0];
         if (owner) campaignOwnerId = owner.user_id;
 
-        await db.execute(
+        const [resTag] = await db.execute(
           `UPDATE campaign_recipients
               SET ${sets.join(", ")}
             WHERE campaign_id = ? AND tracking_token = ?`,
           [campaignId, trackingToken]
         );
+        // Record the hit. Without this the email-wide fallback below always
+        // ran even when the tag lookup had already found the right row.
+        if (((resTag as any)?.affectedRows ?? 0) > 0) updated = true;
       }
     }
 
-    // Final fallback: match purely by recipient email. Many older rows have no
-    // stored message_id (or were sent via a provider that didn't return one),
-    // so without this a real bounce can never flip the row off "sent" and the
-    // failure shows as if it went through. A hard bounce means the mailbox is
-    // dead everywhere, so updating every row for that address is correct.
+    // Final fallback: match by recipient email. Many older rows have no stored
+    // message_id (or were sent via a provider that didn't return one), so
+    // without this a real bounce can never flip the row off "sent" and the
+    // failure shows as if it went through.
+    //
+    // One SES event == ONE send, so this must flip exactly ONE row. Updating
+    // every row for the address (across campaigns, and across tenants) made the
+    // app's bounce count a multiple of the count SES reports. We pick the most
+    // recent row that is still in a pre-bounce state, and scope it to the
+    // owning account so one tenant's bounce can never touch another's numbers.
     if (!updated && recipientEmail) {
+      const email = String(recipientEmail).toLowerCase();
       const [ownerRows] = await db.execute(
-        `SELECT c.user_id
+        `SELECT cr.id, c.user_id
            FROM campaign_recipients cr
            JOIN campaigns c ON c.id = cr.campaign_id
-          WHERE cr.email = ?
-          ORDER BY cr.id DESC
+          WHERE LOWER(cr.email) = ?
+            AND cr.status IN ('sent', 'delivered', 'opened', 'clicked')
+          ORDER BY cr.last_event_at DESC, cr.id DESC
           LIMIT 1`,
-        [String(recipientEmail).toLowerCase()]
+        [email]
       );
       const owner = (ownerRows as any[])[0];
-      if (owner) campaignOwnerId = owner.user_id;
-      const [res2] = await db.execute(
-        `UPDATE campaign_recipients SET ${sets.join(", ")} WHERE LOWER(email) = ?`,
-        [String(recipientEmail).toLowerCase()]
-      );
-      if (((res2 as any)?.affectedRows ?? 0) > 0) updated = true;
+      if (owner) {
+        campaignOwnerId = owner.user_id;
+        const [res2] = await db.execute(
+          `UPDATE campaign_recipients SET ${sets.join(", ")} WHERE id = ?`,
+          [owner.id]
+        );
+        if (((res2 as any)?.affectedRows ?? 0) > 0) updated = true;
+      } else {
+        // No open row to flip (already bounced, or the send predates tracking).
+        // Still resolve an owner so the suppression below is recorded.
+        const [anyRows] = await db.execute(
+          `SELECT c.user_id
+             FROM campaign_recipients cr
+             JOIN campaigns c ON c.id = cr.campaign_id
+            WHERE LOWER(cr.email) = ?
+            ORDER BY cr.id DESC
+            LIMIT 1`,
+          [email]
+        );
+        const any = (anyRows as any[])[0];
+        if (any) campaignOwnerId = any.user_id;
+      }
     }
 
     // Auto-add to suppressions on permanent bounce / any complaint.

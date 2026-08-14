@@ -154,7 +154,11 @@ export async function GET(req: Request) {
       queued,
       open_rate: sent > 0 ? Math.round((openedUnique / sent) * 100) : 0,
       click_rate: sent > 0 ? Math.round((clickedUnique / sent) * 100) : 0,
-      bounce_rate: sent > 0 ? Math.round(((bounced + complained) / sent) * 100) : 0,
+      // Bounce rate is bounces / sends, matching how SES reports it. Complaints
+      // are a separate SES metric — including them here made this read higher
+      // than the SES console.
+      bounce_rate: sent > 0 ? Math.round((bounced / sent) * 1000) / 10 : 0,
+      complaint_rate: sent > 0 ? Math.round((complained / sent) * 1000) / 10 : 0,
     },
   });
 }

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
+import { multiFilter, pushInClause, normalizeUploadedEmails, companyInboxes } from "@/lib/audience";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,9 +32,11 @@ export async function GET() {
  *     status?: 'draft' | 'scheduled' | 'sending',
  *     scheduled_at?: ISO string,
  *     audience: {
- *       mode: 'all' | 'filtered' | 'selected',
- *       q?: string,            // when mode === 'filtered', server applies it
- *       contact_ids?: string[] // when mode === 'selected'
+ *       mode: 'all' | 'filtered' | 'selected' | 'uploaded' | 'admin_all',
+ *       q?: string,             // when mode === 'filtered', server applies it
+ *       contact_ids?: string[], // when mode === 'selected'
+ *       emails?: string[],      // when mode === 'uploaded' (one-off list)
+ *       segments?: string[], countries?: string[], company_ids?: string[]
  *     }
  *   }
  *
@@ -64,7 +67,7 @@ export async function POST(req: Request) {
   let mode = String(audience.mode || "all").toLowerCase();
   const callerIsStaff = isStaff(session.role);
   if (mode === "admin_all" && !callerIsStaff) mode = "all"; // silently downgrade non-staff
-  if (!["all", "filtered", "selected", "admin_all"].includes(mode)) mode = "all";
+  if (!["all", "filtered", "selected", "admin_all", "uploaded"].includes(mode)) mode = "all";
   // Audience-side bypass: `admin_all` mode resolves to EVERY contact (ignores unlocks).
   const isAdminAudience = mode === "admin_all";
   // Credit-side bypass: any staff caller (admin OR moderator) sends for free,
@@ -76,8 +79,10 @@ export async function POST(req: Request) {
   const search = String(audience.q || "").trim().toLowerCase();
   // Structured audience filters (parallel to the audience picker's
   // segment/country/company dropdowns).  Applied to 'all' and 'filtered' modes.
-  const filterSegment   = String(audience.segment   || "").trim();
-  const filterCountry   = String(audience.country   || "").trim();
+  // All three are multi-select: `segments`/`countries` (arrays) are preferred,
+  // with the legacy singular keys still honored for older callers.
+  const filterSegments  = multiFilter(audience.segments,  audience.segment);
+  const filterCountries = multiFilter(audience.countries, audience.country);
   // Department targeting (e.g. "LBI") — narrows to contacts whose `department`
   // column matches. Used by the Catalogues & Offers send flow.
   const filterDepartment = String(audience.department || "").trim();
@@ -88,12 +93,12 @@ export async function POST(req: Request) {
   const leadClause = leadsOnly ? "AND c.contact_type = 'lead'" : "";
   // company_ids (array, new) takes priority; company_id (single, legacy) is
   // still honored for any caller that hasn't migrated yet.
-  const filterCompanyIds: string[] = Array.isArray(audience.company_ids)
-    ? audience.company_ids.filter((x: any) => typeof x === "string" && x.trim()).map((x: string) => x.trim())
-    : audience.company_id
-      ? [String(audience.company_id).trim()].filter(Boolean)
-      : [];
-  const hasStructured   = !!(filterSegment || filterCountry || filterCompanyIds.length);
+  const filterCompanyIds = multiFilter(audience.company_ids, audience.company_id);
+  // One-off recipient list pasted/uploaded on the compose page. Re-validated
+  // server-side — the client can post anything here.
+  const uploadedEmails = mode === "uploaded" ? normalizeUploadedEmails(audience.emails) : [];
+  // Also mail each company's general inbox, not just the named contacts.
+  const includeCompanyEmails = audience.include_company_emails === true;
   const explicitIds: string[] = Array.isArray(audience.contact_ids)
     ? audience.contact_ids.filter((x: any) => typeof x === "string" && x)
     : Array.isArray(body.contact_ids) // backwards-compat shim
@@ -117,7 +122,9 @@ export async function POST(req: Request) {
   // For staff (admin/moderator), the unlock requirement is dropped from every
   // audience mode — they can mail any contact in the DB.  For regular users
   // we keep the join with unlocked_contacts_v.
-  let recipients: Array<{ id: string; email: string }> = [];
+  // `id` is the contact id, or null for uploaded addresses with no contact row
+  // (campaign_recipients.contact_id is nullable for exactly this case).
+  let recipients: Array<{ id: string | null; email: string; company_id?: string | null }> = [];
 
   if (mode === "selected") {
     if (!explicitIds.length) {
@@ -129,12 +136,12 @@ export async function POST(req: Request) {
       // leadClause is empty for regular sends and 'AND c.contact_type = \'lead\''
       // for catalogue/offer sends.
       const sql = callerIsStaff
-        ? `SELECT DISTINCT c.id, c.email
+        ? `SELECT DISTINCT c.id, c.email, c.company_id
              FROM contacts c
             WHERE c.id IN (${ph})
               ${leadClause}
               AND c.email IS NOT NULL AND c.email <> ''`
-        : `SELECT DISTINCT c.id, c.email
+        : `SELECT DISTINCT c.id, c.email, c.company_id
              FROM contacts c
              JOIN unlocked_contacts_v u
                ON u.contact_id = c.id AND u.user_id = ?
@@ -143,17 +150,45 @@ export async function POST(req: Request) {
               AND c.email IS NOT NULL AND c.email <> ''`;
       const params = callerIsStaff ? explicitIds : [session.id, ...explicitIds];
       const [rows] = await db.query(sql, params);
-      recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
+      recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email, company_id: r.company_id }));
+    }
+  } else if (mode === "uploaded") {
+    // One-off list uploaded on the compose page. These addresses deliberately
+    // do NOT have to exist in `contacts` — that's the whole point of the mode —
+    // so contact_id stays NULL for anything we can't match.
+    if (!uploadedEmails.length) {
+      if (status === "sending") {
+        return NextResponse.json({ error: "The uploaded list has no valid email addresses" }, { status: 400 });
+      }
+    } else {
+      // Best-effort match back to existing contacts so the tracking page can
+      // show a name instead of a bare address. Chunked because a 10k-element
+      // IN list is far past what MySQL will plan well.
+      const byEmail = new Map<string, string>();
+      const CHUNK = 500;
+      for (let i = 0; i < uploadedEmails.length; i += CHUNK) {
+        const slice = uploadedEmails.slice(i, i + CHUNK);
+        const [rows] = await db.query(
+          `SELECT id, LOWER(email) AS email
+             FROM contacts
+            WHERE LOWER(email) IN (${slice.map(() => "?").join(",")})`,
+          slice
+        );
+        for (const r of rows as any[]) {
+          if (!byEmail.has(r.email)) byEmail.set(r.email, r.id);
+        }
+      }
+      recipients = uploadedEmails.map((email) => ({ id: byEmail.get(email) ?? null, email }));
     }
   } else if (isAdminBypass) {
     // Explicit admin compose: send to EVERY contact with a valid email
     // (restricted to leads only when the send is a catalogue/offer).
     const [rows] = await db.query(
-      `SELECT id, email FROM contacts
+      `SELECT id, email, company_id FROM contacts
         WHERE email IS NOT NULL AND email <> ''
           ${leadsOnly ? "AND contact_type = 'lead'" : ""}`
     );
-    recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
+    recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email, company_id: r.company_id }));
   } else {
     // 'all' or 'filtered'.  Regular user: scoped to their unlocked_contacts_v.
     // Staff: scoped to ALL contacts (no unlock join).
@@ -169,29 +204,32 @@ export async function POST(req: Request) {
       where.push("(LOWER(c.contact_name) LIKE ? OR LOWER(c.email) LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
     }
-    if (filterCompanyIds.length === 1) {
-      where.push("c.company_id = ?");
-      params.push(filterCompanyIds[0]);
-    } else if (filterCompanyIds.length > 1) {
-      where.push(`c.company_id IN (${filterCompanyIds.map(() => "?").join(",")})`);
-      params.push(...filterCompanyIds);
-    }
-    if (filterSegment)    { where.push("co.segment = ?");   params.push(filterSegment); }
-    if (filterCountry)    { where.push("co.country = ?");   params.push(filterCountry); }
+    pushInClause(where, params, "c.company_id", filterCompanyIds);
+    pushInClause(where, params, "co.segment", filterSegments);
+    pushInClause(where, params, "co.country", filterCountries);
     if (filterDepartment) { where.push("c.department = ?"); params.push(filterDepartment); }
 
     const fromParts: string[] = ["contacts c"];
     if (!callerIsStaff) fromParts.push("JOIN unlocked_contacts_v u ON u.contact_id = c.id");
-    if (filterSegment || filterCountry) {
+    if (filterSegments.length || filterCountries.length) {
       fromParts.push("LEFT JOIN companies co ON co.company_id = c.company_id");
     }
     const [rows] = await db.query(
-      `SELECT DISTINCT c.id, c.email
+      `SELECT DISTINCT c.id, c.email, c.company_id
          FROM ${fromParts.join(" ")}
         WHERE ${where.join(" AND ")}`,
       params
     );
-    recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email }));
+    recipients = (rows as any[]).map((r) => ({ id: r.id, email: r.email, company_id: r.company_id }));
+  }
+
+  // Append the general inboxes of every company represented in the audience.
+  // contact_id stays NULL — these are company addresses, not people.
+  if (includeCompanyEmails && recipients.length) {
+    const inboxes = await companyInboxes(
+      recipients.map((r) => r.company_id).filter(Boolean) as string[]
+    );
+    for (const email of inboxes) recipients.push({ id: null, email });
   }
 
   // Deduplicate by lowercase email so the same address only gets one

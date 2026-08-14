@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   for (const id of ids) {
     agg[id] = {
       campaign_id: id,
-      recipients: 0, queued: 0, delivered: 0, bounced: 0,
+      recipients: 0, queued: 0, delivered: 0, bounced: 0, complained: 0,
       opened_unique: 0, clicks_total: 0, opens_total: 0,
     };
   }
@@ -36,7 +36,11 @@ export async function POST(req: Request) {
     // "delivered" here means "successfully handed to the provider" — sent,
     // delivered, opened, clicked all count. Bounced/complained are failures.
     if (["sent", "delivered", "opened", "clicked"].includes(r.status)) a.delivered++;
-    if (r.status === "bounced" || r.status === "complained") a.bounced++;
+    // Bounces and complaints are counted separately — SES reports them as two
+    // distinct metrics, and folding complaints into `bounced` made this number
+    // read higher than the SES console for the same campaign.
+    if (r.status === "bounced") a.bounced++;
+    if (r.status === "complained") a.complained++;
     a.opens_total += Number(r.opens_count || 0);
     a.clicks_total += Number(r.clicks_count || 0);
     if (r.opened_at) a.opened_unique++;

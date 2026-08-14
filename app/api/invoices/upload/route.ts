@@ -65,18 +65,18 @@ export async function POST(req: Request) {
       `INSERT INTO proforma_invoices
         (id, user_id, invoice_number, status, source, pdf_path,
          customer_contact_id, customer_company_id, customer_name, customer_email,
-         customer_company, customer_gstin, customer_address,
+         customer_phone, customer_company, customer_gstin, customer_pan, customer_address,
          seller_name, seller_email, seller_phone, seller_company, seller_gstin, seller_pan, seller_address,
          issue_date, currency, subtotal, discount, tax_rate, tax_amount, total, notes)
        VALUES (?, ?, ?, 'draft', 'upload', ?,
          ?, ?, ?, ?,
-         ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, 0, 0, 0, ?, ?)`,
       [
         id, session.id, invoiceNumber, saved.file_path,
         f(form, "customer_contact_id", 36), f(form, "customer_company_id", 36), customerName, f(form, "customer_email"),
-        customerCompany, f(form, "customer_gstin", 32), f(form, "customer_address", 2000),
+        f(form, "customer_phone", 64), customerCompany, f(form, "customer_gstin", 32), f(form, "customer_pan", 32), f(form, "customer_address", 2000),
         null, settings?.email || session.email || null, settings?.phone || null,
         settings?.seller_company || null, settings?.gstin || null, settings?.pan || null, settings?.seller_address || null,
         issueDate, currency, total, total, f(form, "notes", 4000),

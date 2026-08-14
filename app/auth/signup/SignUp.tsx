@@ -14,6 +14,8 @@ export default function SignUpPage() {
   const [password, setPassword] = useState('');
   const [companyId, setCompanyId] = useState('');
   const [companies, setCompanies] = useState<{ company_id: string; name: string }[]>([]);
+  /** How many match on the server — may exceed what's listed below. */
+  const [companyTotal, setCompanyTotal] = useState(0);
   const [companyQuery, setCompanyQuery] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -21,12 +23,25 @@ export default function SignUpPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   // Load the company list for the "which company do you want to join" picker.
+  //
+  // The search runs on the SERVER, debounced. It used to fetch one page of 500
+  // once and filter that in memory, so on a list longer than the page the
+  // companies past it could never be found however you spelled them — and the
+  // <select> then cut the result down to 200 on top of that.
   useEffect(() => {
-    fetch('/api/companies/public', { credentials: 'same-origin' })
-      .then((r) => r.json())
-      .then((d) => setCompanies(Array.isArray(d?.data) ? d.data : []))
-      .catch(() => setCompanies([]));
-  }, []);
+    const handle = setTimeout(() => {
+      const u = new URL('/api/companies/public', window.location.origin);
+      if (companyQuery.trim()) u.searchParams.set('q', companyQuery.trim());
+      fetch(u.toString(), { credentials: 'same-origin' })
+        .then((r) => r.json())
+        .then((d) => {
+          setCompanies(Array.isArray(d?.data) ? d.data : []);
+          setCompanyTotal(Number(d?.total || 0));
+        })
+        .catch(() => setCompanies([]));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [companyQuery]);
 
   // If already signed in, bounce to next or /companies
   useEffect(() => {
@@ -131,15 +146,13 @@ export default function SignUpPage() {
             <label className="block text-sm text-gray-300 mb-1">
               Company to join <span className="text-red-400">*</span>
             </label>
-            {companies.length > 12 && (
-              <input
-                type="text"
-                value={companyQuery}
-                onChange={(e) => setCompanyQuery(e.target.value)}
-                placeholder="Search companies…"
-                className="w-full mb-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            )}
+            <input
+              type="text"
+              value={companyQuery}
+              onChange={(e) => setCompanyQuery(e.target.value)}
+              placeholder="Search by company name or code…"
+              className="w-full mb-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
             <select
               required
               value={companyId}
@@ -147,18 +160,21 @@ export default function SignUpPage() {
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             >
               <option value="" disabled>— Select your company —</option>
-              {companies
-                .filter((c) =>
-                  !companyQuery.trim() ? true : c.name.toLowerCase().includes(companyQuery.trim().toLowerCase())
-                )
-                .slice(0, 200)
-                .map((c) => (
-                  <option key={c.company_id} value={c.company_id}>
-                    {c.name}
-                  </option>
-                ))}
+              {companies.map((c) => (
+                <option key={c.company_id} value={c.company_id}>
+                  {c.name} ({c.company_id})
+                </option>
+              ))}
             </select>
             <p className="mt-1 text-xs text-gray-500">
+              {companies.length === 0 && companyQuery.trim()
+                ? `No company matches "${companyQuery.trim()}".`
+                : companyTotal > companies.length
+                ? `Showing ${companies.length} of ${companyTotal.toLocaleString()} — type to narrow the list.`
+                : null}
+              {companies.length > 0 && companyTotal <= companies.length && (
+                <>All {companies.length.toLocaleString()} companies listed. </>
+              )}
               Your request to join is sent to an admin for approval. You'll get access once it's approved.
             </p>
           </div>

@@ -79,7 +79,9 @@ export async function GET(req: Request) {
   for (const r of rows as any[]) {
     lines.push(header.map((h) => csvEscape((r as any)[h])).join(","));
   }
-  const body = lines.join("\n");
+  // UTF-8 BOM + CRLF so Excel on Windows decodes this as UTF-8 rather than the
+  // system ANSI codepage (see the contacts/companies exports).
+  const body = "﻿" + lines.join("\r\n");
   const ts = new Date().toISOString().slice(0, 10);
 
   return new Response(body, {
