@@ -7,6 +7,34 @@ import { cleanPhone, cleanUrl, type CleanResult } from "@/lib/validate";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/**
+ * Every table that stores a company_id, and the column it keeps it in.
+ *
+ * This schema declares no foreign keys, so a primary-key rename has to carry
+ * the referencing rows across by hand. Miss one and its rows point at a company
+ * that no longer exists — silently, because there is no constraint to object:
+ * the contacts simply stop showing under the company, and an invoice loses the
+ * customer it was raised for.
+ */
+const COMPANY_ID_REFERENCES: Array<{ table: string; column: string }> = [
+  { table: "contacts", column: "company_id" },
+  { table: "company_memberships", column: "company_id" },
+  { table: "company_catalogues", column: "company_id" },
+  { table: "company_assets_unlocks", column: "company_id" },
+  { table: "offers", column: "customer_company_id" },
+  { table: "proforma_invoices", column: "customer_company_id" },
+];
+
+/** True for "that table or column isn't here" — an install without the feature. */
+function isMissingSchema(e: any): boolean {
+  return (
+    e?.code === "ER_NO_SUCH_TABLE" ||
+    e?.errno === 1146 ||
+    e?.code === "ER_BAD_FIELD_ERROR" ||
+    e?.errno === 1054
+  );
+}
+
 async function fetchOwned(id: string, userId: string, isAdmin: boolean) {
   const sql = isAdmin
     ? "SELECT * FROM companies WHERE company_id = ? LIMIT 1"
@@ -135,16 +163,91 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
     vals.push(...metaVals);
   }
 
-  if (!sets.length) {
+  // A company_id change is a primary-key rename, not a column update — see
+  // COMPANY_ID_REFERENCES. Admin-only: a company with no owner is shared by
+  // every user, so this is never just one person's data being reorganised.
+  const requestedId =
+    "company_id" in body ? String((body as any).company_id ?? "").trim() : null;
+  const renaming = requestedId !== null && requestedId !== params.company_id;
+
+  if (renaming) {
+    if (session.role !== "admin") {
+      return NextResponse.json(
+        { error: "Only an admin can change a company ID" },
+        { status: 403 }
+      );
+    }
+    if (!requestedId) {
+      return NextResponse.json({ error: "Company ID cannot be empty" }, { status: 400 });
+    }
+    // The column is CHAR(36); anything longer would be truncated on the way in
+    // and the rename would land somewhere the caller did not ask for.
+    if (requestedId!.length > 36) {
+      return NextResponse.json(
+        { error: "Company ID cannot be longer than 36 characters" },
+        { status: 400 }
+      );
+    }
+    const [taken] = await db.execute(
+      "SELECT company_id FROM companies WHERE company_id = ? LIMIT 1",
+      [requestedId]
+    );
+    if ((taken as any[]).length) {
+      return NextResponse.json(
+        { error: `Company ID "${requestedId}" is already used by another company` },
+        { status: 409 }
+      );
+    }
+  }
+
+  if (!sets.length && !renaming) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  vals.push(params.company_id);
-  await db.execute(`UPDATE companies SET ${sets.join(", ")} WHERE company_id = ?`, vals);
+  const targetId = renaming ? requestedId! : params.company_id;
+
+  // The rename and the rows that follow it have to be one unit: a half-applied
+  // rename leaves contacts and invoices pointing at an id that is gone.
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    if (renaming) {
+      await conn.execute("UPDATE companies SET company_id = ? WHERE company_id = ?", [
+        targetId,
+        params.company_id,
+      ]);
+      for (const ref of COMPANY_ID_REFERENCES) {
+        try {
+          await conn.execute(
+            `UPDATE ${ref.table} SET ${ref.column} = ? WHERE ${ref.column} = ?`,
+            [targetId, params.company_id]
+          );
+        } catch (e) {
+          // A feature this install doesn't have is not a reason to fail.
+          if (!isMissingSchema(e)) throw e;
+        }
+      }
+    }
+
+    if (sets.length) {
+      await conn.execute(`UPDATE companies SET ${sets.join(", ")} WHERE company_id = ?`, [
+        ...vals,
+        targetId,
+      ]);
+    }
+
+    await conn.commit();
+  } catch (e: any) {
+    await conn.rollback();
+    return NextResponse.json({ error: e?.message || "Update failed" }, { status: 500 });
+  } finally {
+    conn.release();
+  }
 
   const [rows] = await db.execute(
     "SELECT * FROM companies WHERE company_id = ? LIMIT 1",
-    [params.company_id]
+    [targetId]
   );
   return NextResponse.json({ company: (rows as any[])[0] });
 }

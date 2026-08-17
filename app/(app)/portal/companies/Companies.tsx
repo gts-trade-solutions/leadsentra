@@ -399,6 +399,9 @@ export default function CompaniesPage() {
   const [editCompanyBusy, setEditCompanyBusy] = useState(false);
   const [editCompanyErr, setEditCompanyErr] = useState<string | null>(null);
   const [editCompanyForm, setEditCompanyForm] = useState({
+    // The row's primary key. Editable by an admin; see the modal for what a
+    // change carries with it.
+    company_id: "",
     name: "",
     type: "",
     segment: "",
@@ -438,6 +441,7 @@ export default function CompaniesPage() {
     // Prefill from the row (full company is not always loaded; admin can
     // refine via the full company modal if they need more fields).
     setEditCompanyForm({
+      company_id: r.company_id,
       name: r.name || "",
       type: r.companyType || "",
       segment: "",
@@ -518,6 +522,11 @@ export default function CompaniesPage() {
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
+          // Only sent when an admin actually changed it — the route treats the
+          // key's presence as a rename request and rejects it for everyone else.
+          ...(isAdmin && editCompanyForm.company_id.trim() !== editCompanyId
+            ? { company_id: editCompanyForm.company_id.trim() }
+            : {}),
           name: editCompanyForm.name.trim(),
           type: editCompanyForm.type.trim(),
           segment: editCompanyForm.segment.trim(),
@@ -1869,6 +1878,30 @@ export default function CompaniesPage() {
               {editCompanyErr && <div className="text-sm text-red-300">{editCompanyErr}</div>}
             </div>
             <div className="px-5 py-4 max-h-[70vh] overflow-y-auto grid md:grid-cols-2 gap-3">
+              {/* The company ID is the key contacts, offers and invoices are
+                  filed under, and the column a re-uploaded sheet matches on —
+                  so an import that generated a UUID can be given the code the
+                  business actually uses. Admin-only, and renaming it moves
+                  everything that points at this company along with it. */}
+              {isAdmin && (
+                <div className="md:col-span-2">
+                  <label className="text-xs text-gray-400 block mb-1">Company ID</label>
+                  <input
+                    value={editCompanyForm.company_id}
+                    onChange={(e) =>
+                      setEditCompanyForm((f) => ({ ...f, company_id: e.target.value }))
+                    }
+                    maxLength={36}
+                    spellCheck={false}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 font-mono text-sm"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Max 36 characters, and must not already belong to another company.
+                    Changing it also updates every contact, offer and invoice filed
+                    under it.
+                  </p>
+                </div>
+              )}
               <div className="md:col-span-2">
                 <label className="text-xs text-gray-400 block mb-1">Company name</label>
                 <input
