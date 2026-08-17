@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { db } from "@/lib/db";
 import { requireRole } from "@/lib/admin";
-import { loadVocabularies, VOCAB_KINDS, type VocabKind } from "@/lib/vocab";
+import {
+  loadVocabularies,
+  VOCAB_KINDS,
+  VOCAB_COLUMN,
+  type VocabKind,
+} from "@/lib/vocab";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,6 +21,41 @@ const VALIDATED_COLUMNS: Record<string, VocabKind> = {
 
 /** Rows of the sheet that get a dropdown. Comfortably covers a 5 MB upload. */
 const VALIDATED_ROWS = 2000;
+
+/** Ceiling on a fallback dropdown, so one messy column can't bloat the file. */
+const MAX_FALLBACK_VALUES = 500;
+
+/**
+ * The values one column's dropdown should offer.
+ *
+ * Normally the approved list. When a vocabulary has no approved terms — a fresh
+ * install, or `2026-07-28_company_data_quality.sql` not applied, which leaves
+ * `vocab_terms` missing altogether — the template used to ship a dropdown whose
+ * only entry was "(no company_type values configured yet)", so the column was
+ * unusable in the very template meant to make it easy. Fall back to the values
+ * companies already hold, which is the same rule the importer applies when it
+ * bootstraps an empty vocabulary from an uploaded sheet.
+ */
+async function dropdownValues(kind: VocabKind, approved: string[]): Promise<string[]> {
+  if (approved.length) return approved;
+
+  // Column name comes from a fixed map, never from user input.
+  const col = VOCAB_COLUMN[kind];
+  const [rows] = await db.query(
+    `SELECT TRIM(${col}) AS value
+       FROM companies
+      WHERE TRIM(COALESCE(${col}, '')) <> ''
+      GROUP BY TRIM(${col})
+      ORDER BY COUNT(*) DESC, value ASC
+      LIMIT ${MAX_FALLBACK_VALUES}`
+  );
+  // Picked by how many companies use them, then listed alphabetically — which
+  // is the order someone scrolling the dropdown in Excel expects.
+  return (rows as any[])
+    .map((r) => String(r.value ?? "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
 
 /**
  * GET /api/companies/template
@@ -38,7 +78,9 @@ export async function GET() {
 
   const vocab = await loadVocabularies(db);
   const values = Object.fromEntries(
-    VOCAB_KINDS.map((k) => [k, vocab[k].terms])
+    await Promise.all(
+      VOCAB_KINDS.map(async (k) => [k, await dropdownValues(k, vocab[k].terms)])
+    )
   ) as Record<VocabKind, string[]>;
 
   // Keep this in lockstep with the canonical column order used by the CSV
@@ -58,8 +100,16 @@ export async function GET() {
     "country",
     "postal_code",
     "website",
+    // A company routinely has more than one usable number and inbox. The
+    // columns and the importer have taken all three since
+    // 2026-08-14_company_extra_contacts.sql; leaving them out of the template
+    // meant nobody filling it in had anywhere to put the extras.
     "phone_main",
+    "phone_main_2",
+    "phone_main_3",
     "email_general",
+    "email_general_2",
+    "email_general_3",
     "linkedin",
     "facebook_url",
     "instagram_url",
