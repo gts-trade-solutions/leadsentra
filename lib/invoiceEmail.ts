@@ -33,13 +33,13 @@ export function buildInvoiceEmail(
     .map((v) => String(v || "").trim())
     .find((v) => v && !isEmailish(v));
 
-  // The invoice's own subject is what it is about, so it titles the email the
-  // recipient sees in their inbox, with the number kept for reference. Without
-  // one, fall back to naming the invoice and who it came from.
+  // The subject typed on the invoice IS the email's subject — exactly as
+  // typed. The invoice number used to be appended to it, which pushed the part
+  // the customer recognises out of the inbox preview; the number is on the PDF,
+  // in the body, and in the attachment's filename anyway. With no subject
+  // typed, fall back to naming the invoice and who it came from.
   const titled = String(invoice.subject || "").replace(/[\r\n]+/g, " ").trim();
-  const subject = titled
-    ? `${titled} - Proforma Invoice ${invoice.invoice_number}`
-    : `Proforma Invoice ${invoice.invoice_number}${seller ? ` from ${seller}` : ""}`;
+  const subject = titled || `Proforma Invoice ${invoice.invoice_number}${seller ? ` from ${seller}` : ""}`;
 
   const intro =
     opts.message?.trim() ||
