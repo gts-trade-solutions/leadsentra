@@ -16,7 +16,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ campaigns: [] }, { status: 401 });
 
   const [rows] = await db.execute(
-    `SELECT id, name, status, created_at, recipients_count, credits_charged
+    `SELECT id, name, status, created_at, recipients_count, credits_charged, low_signal
        FROM campaigns
       WHERE user_id = ?
       ORDER BY created_at DESC`,

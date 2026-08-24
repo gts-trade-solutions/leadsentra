@@ -20,7 +20,14 @@ import StatCard from "@/components/StatCard";
 import WalletBadge from "@/components/WalletBadge";
 import EmptyState from "@/components/EmptyState";
 
-type CampaignRow = { id: string; name: string; status: string; created_at: string };
+type CampaignRow = {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  /** Sent in "Primary inbox" mode — no open pixel, no click rewrites. */
+  low_signal?: number | boolean;
+};
 
 interface CampaignMetric {
   campaign_id: string;
@@ -128,13 +135,25 @@ export default function CampaignsPage() {
         opened_unique: 0, clicks_total: 0, opens_total: 0,
       };
     const sentCount = Math.max(0, m.recipients - m.queued);
+    // A campaign sent in Primary-inbox mode carries no pixel and no rewritten
+    // links, so its opens and clicks can only ever be zero. Printing "0" reads
+    // as "nobody opened it" — say that it wasn't measured instead.
+    const untracked = !!Number(c.low_signal);
+    const notTracked = (
+      <span
+        className="text-gray-500"
+        title="Sent in Primary-inbox mode: opens and clicks aren't tracked for this campaign."
+      >
+        off
+      </span>
+    );
     return {
       name: <span className="font-medium text-white">{c.name}</span>,
       status: <StatusBadge status={c.status} />,
       sent: sentCount.toLocaleString("en-US"),
       delivered: m.delivered.toLocaleString("en-US"),
-      opens: m.opens_total.toLocaleString("en-US"),
-      clicks: m.clicks_total.toLocaleString("en-US"),
+      opens: untracked ? notTracked : m.opens_total.toLocaleString("en-US"),
+      clicks: untracked ? notTracked : m.clicks_total.toLocaleString("en-US"),
       bounced: m.bounced.toLocaleString("en-US"),
       details: (
         <Link

@@ -7,6 +7,24 @@ export function unsubscribeUrl(trackingToken: string, baseUrl: string): string {
   return `${baseUrl}/api/unsubscribe?t=${encodeURIComponent(trackingToken)}`;
 }
 
+/**
+ * Add markup at the end of the message, INSIDE the document.
+ *
+ * A campaign body is usually a complete `<!doctype html>…</html>` document
+ * (that is what ensureEmailHtml and the templates produce). Appending the
+ * pixel and the footer after `</html>` puts them outside the document, and
+ * mail clients that sanitise the HTML — Gmail and Outlook among them — drop
+ * whatever sits out there. The open pixel then never loads and the campaign
+ * reports zero opens no matter how many people read it.
+ */
+function appendInsideBody(html: string, extra: string): string {
+  for (const close of [/<\/body\s*>/i, /<\/html\s*>/i]) {
+    const at = html.search(close);
+    if (at !== -1) return html.slice(0, at) + extra + html.slice(at);
+  }
+  return html + extra;
+}
+
 export function withTracking(
   html: string,
   campaignId: string,
@@ -52,17 +70,20 @@ export function withTracking(
   // bulk-sender compliance.
   const hasUnsubMention = /unsubscribe/i.test(body) || body.includes(unsubUrl);
   if (!hasUnsubMention) {
-    body += `<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0 12px"/>
+    body = appendInsideBody(
+      body,
+      `<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0 12px"/>
 <p style="color:#6b7280;font-size:11px;line-height:1.4;font-family:Arial,sans-serif">
   Don't want these emails? <a href="${unsubUrl}" style="color:#6b7280;text-decoration:underline">Unsubscribe</a>.
-</p>`;
+</p>`
+    );
   }
 
   // 1x1 open-tracking pixel — last so it doesn't appear in the visible footer.
   // Omitted in low-signal mode (a tracking pixel is a classic Promotions cue).
   if (lowSignal) return body;
   const pixel = `<img src="${baseUrl}/api/track/open?c=${campaignId}&t=${trackingToken}" width="1" height="1" style="display:none" alt="" />`;
-  return body + pixel;
+  return appendInsideBody(body, pixel);
 }
 
 /**
