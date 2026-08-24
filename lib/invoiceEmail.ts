@@ -26,8 +26,20 @@ export function buildInvoiceEmail(
   opts: { message?: string } = {}
 ): { subject: string; html: string; text: string } {
   const cur = invoice.currency;
-  const sellerName = invoice.seller_company || invoice.seller_name || "We";
-  const subject = `Proforma Invoice ${invoice.invoice_number} from ${invoice.seller_company || invoice.seller_name || "us"}`;
+  // An email address is not a company name — seller_name can hold the account's
+  // login address, and "from enquiry@…" is not who the invoice is from.
+  const isEmailish = (v: unknown) => /\S+@\S+\.\S+/.test(String(v ?? ""));
+  const seller = [invoice.seller_company, invoice.seller_name]
+    .map((v) => String(v || "").trim())
+    .find((v) => v && !isEmailish(v));
+
+  // The invoice's own subject is what it is about, so it titles the email the
+  // recipient sees in their inbox, with the number kept for reference. Without
+  // one, fall back to naming the invoice and who it came from.
+  const titled = String(invoice.subject || "").replace(/[\r\n]+/g, " ").trim();
+  const subject = titled
+    ? `${titled} - Proforma Invoice ${invoice.invoice_number}`
+    : `Proforma Invoice ${invoice.invoice_number}${seller ? ` from ${seller}` : ""}`;
 
   const intro =
     opts.message?.trim() ||
@@ -93,7 +105,7 @@ export function buildInvoiceEmail(
           <tr><td style="padding:24px 28px 8px 28px;">
             <table role="presentation" width="100%"><tr>
               <td style="vertical-align:top;">
-                <div style="font-size:18px;font-weight:700;color:#0f172a;">${esc(invoice.seller_company || invoice.seller_name || "")}</div>
+                <div style="font-size:18px;font-weight:700;color:#0f172a;">${esc(seller || "")}</div>
                 ${invoice.seller_address ? `<div style="color:#64748b;font-size:12px;margin-top:4px;">${nl2br(invoice.seller_address)}</div>` : ""}
                 ${invoice.seller_gstin ? `<div style="color:#64748b;font-size:12px;">GSTIN: ${esc(invoice.seller_gstin)}</div>` : ""}
               </td>
@@ -175,7 +187,7 @@ export function buildInvoiceEmail(
 
   const textLines = [
     `PROFORMA INVOICE ${invoice.invoice_number}`,
-    `From: ${invoice.seller_company || invoice.seller_name || ""}`,
+    `From: ${seller || ""}`,
     `Date: ${invoice.issue_date}${invoice.valid_until ? `  Valid until: ${invoice.valid_until}` : ""}`,
     "",
     `Bill To: ${invoice.customer_company || invoice.customer_name || ""}`,

@@ -1,7 +1,14 @@
 import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
-import { normalizeItems, computeTotals, nextInvoiceNumber, num } from "./invoices";
+import {
+  normalizeItems,
+  computeTotals,
+  nextInvoiceNumber,
+  num,
+  parseRecipients,
+  MAX_INVOICE_RECIPIENTS,
+} from "./invoices";
 
 /**
  * Shared "create a proforma invoice" routine used by both the invoices API
@@ -57,6 +64,17 @@ export async function createProformaInvoice(
   if (!customer.name && !customer.company) {
     throw new HttpError(400, "Customer name or company is required.");
   }
+
+  // Everyone else this invoice should reach — billing, procurement, whoever
+  // asked for it. customer_email stays the customer of record; these ride
+  // along on every send, including a re-send from the list.
+  const extra = parseRecipients(body.extra_recipients);
+  if (extra.invalid.length) {
+    throw new HttpError(400, `Not a valid email address: ${extra.invalid.join(", ")}`);
+  }
+  const primary = String(customer.email || "").trim().toLowerCase();
+  const extraRecipients =
+    extra.valid.filter((e) => e !== primary).slice(0, MAX_INVOICE_RECIPIENTS - 1).join(", ") || null;
 
   const [profile, settings] = await Promise.all([
     loadBillingProfile(userId),
@@ -122,7 +140,7 @@ export async function createProformaInvoice(
     await conn.execute(
       `INSERT INTO proforma_invoices
         (id, user_id, invoice_number, subject, status, source,
-         customer_contact_id, customer_company_id, customer_name, customer_email,
+         customer_contact_id, customer_company_id, customer_name, customer_email, extra_recipients,
          customer_phone, customer_company, customer_gstin, customer_pan, customer_address,
          seller_name, seller_email, seller_phone, seller_company, seller_gstin, seller_pan, seller_address,
          ref, payment_terms, delivery_terms,
@@ -132,7 +150,7 @@ export async function createProformaInvoice(
          tax_rate, tax_amount, igst_rate, igst_amount, total,
          notes, terms)
        VALUES (?, ?, ?, ?, 'draft', 'generated',
-         ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?,
@@ -143,7 +161,7 @@ export async function createProformaInvoice(
          ?, ?)`,
       [
         id, userId, invoiceNumber, subject,
-        customer.contact_id, customer.company_id, customer.name, customer.email,
+        customer.contact_id, customer.company_id, customer.name, customer.email, extraRecipients,
         customer.phone, customer.company, customer.gstin, customer.pan, customer.address,
         seller.name, seller.email, seller.phone, seller.company, seller.gstin, seller.pan, seller.address,
         ref, paymentTerms, deliveryTerms,

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
-import { nextInvoiceNumber, num } from "@/lib/invoices";
+import { nextInvoiceNumber, num, parseRecipients, MAX_INVOICE_RECIPIENTS } from "@/lib/invoices";
 import { saveInvoiceFile } from "@/lib/invoiceUpload";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +41,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Customer name or company is required." }, { status: 400 });
   }
 
+  // Everyone besides the customer of record who should get this invoice.
+  const customerEmail = f(form, "customer_email");
+  const extra = parseRecipients(f(form, "extra_recipients", 1024));
+  if (extra.invalid.length) {
+    return NextResponse.json(
+      { error: `Not a valid email address: ${extra.invalid.join(", ")}` },
+      { status: 400 }
+    );
+  }
+  const extraRecipients =
+    extra.valid
+      .filter((e) => e !== String(customerEmail || "").trim().toLowerCase())
+      .slice(0, MAX_INVOICE_RECIPIENTS - 1)
+      .join(", ") || null;
+
   const currency = (f(form, "currency", 8) || "INR").toUpperCase();
   const total = Math.max(0, num(form.get("total"), 0));
   const issueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(form.get("issue_date") || ""))
@@ -64,18 +79,18 @@ export async function POST(req: Request) {
     await conn.execute(
       `INSERT INTO proforma_invoices
         (id, user_id, invoice_number, status, source, pdf_path,
-         customer_contact_id, customer_company_id, customer_name, customer_email,
+         customer_contact_id, customer_company_id, customer_name, customer_email, extra_recipients,
          customer_phone, customer_company, customer_gstin, customer_pan, customer_address,
          seller_name, seller_email, seller_phone, seller_company, seller_gstin, seller_pan, seller_address,
          issue_date, currency, subtotal, discount, tax_rate, tax_amount, total, notes)
        VALUES (?, ?, ?, 'draft', 'upload', ?,
-         ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, 0, 0, 0, ?, ?)`,
       [
         id, session.id, invoiceNumber, saved.file_path,
-        f(form, "customer_contact_id", 36), f(form, "customer_company_id", 36), customerName, f(form, "customer_email"),
+        f(form, "customer_contact_id", 36), f(form, "customer_company_id", 36), customerName, customerEmail, extraRecipients,
         f(form, "customer_phone", 64), customerCompany, f(form, "customer_gstin", 32), f(form, "customer_pan", 32), f(form, "customer_address", 2000),
         null, settings?.email || session.email || null, settings?.phone || null,
         settings?.seller_company || null, settings?.gstin || null, settings?.pan || null, settings?.seller_address || null,

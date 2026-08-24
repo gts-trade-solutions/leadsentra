@@ -67,8 +67,12 @@ export default function NewInvoice() {
   const [taxRate, setTaxRate] = useState("18");
   const [igstRate, setIgstRate] = useState("18");
   const [bank, setBank] = useState({ name: "", account: "", branch: "", ifsc: "" });
+  /** Your own company — prints as the "Communication Address" block on the PDF. */
+  const [seller, setSeller] = useState({ company: "", address: "", gstin: "", pan: "", email: "", phone: "" });
   /** Seller details missing from the invoice settings, named for the warning. */
   const [sellerGaps, setSellerGaps] = useState<string[]>([]);
+  /** Extra people this invoice is emailed to, alongside the customer. */
+  const [extraRecipients, setExtraRecipients] = useState("");
   const [ref, setRef] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [deliveryTerms, setDeliveryTerms] = useState("");
@@ -118,10 +122,9 @@ export default function NewInvoice() {
         const res = await fetch("/api/invoices/settings", { cache: "no-store", credentials: "same-origin" });
         const json = await res.json().catch(() => ({}));
         const s = json?.settings;
-        // The seller block on the PDF is filled entirely from these settings —
-        // there is no field for it on this form. Left empty, the invoice goes
-        // out with a blank "Communication Address", so say so up front rather
-        // than after it has been sent.
+        // Nothing saved means the "Your company" block below starts empty, and
+        // an invoice sent that way has a blank "Communication Address". Say so
+        // up front rather than after it has gone out.
         const missing = [
           ["seller_company", "company name"],
           ["seller_address", "communication address"],
@@ -129,6 +132,14 @@ export default function NewInvoice() {
         ].filter(([k]) => !String(s?.[k as string] || "").trim()).map(([, label]) => label as string);
         setSellerGaps(missing);
         if (!s) return;
+        setSeller({
+          company: s.seller_company || "",
+          address: s.seller_address || "",
+          gstin: s.gstin || "",
+          pan: s.pan || "",
+          email: s.email || "",
+          phone: s.phone || "",
+        });
         setBank({
           name: s.bank_name || "",
           account: s.bank_account || "",
@@ -264,6 +275,13 @@ export default function NewInvoice() {
       customer_gstin: customer.gstin || null,
       customer_pan: customer.pan || null,
       customer_address: customer.address || null,
+      extra_recipients: extraRecipients || null,
+      seller_company: seller.company || null,
+      seller_address: seller.address || null,
+      seller_gstin: seller.gstin || null,
+      seller_pan: seller.pan || null,
+      seller_email: seller.email || null,
+      seller_phone: seller.phone || null,
       currency,
       issue_date: issueDate,
       valid_until: validUntil || null,
@@ -329,6 +347,7 @@ export default function NewInvoice() {
     fd.append("customer_gstin", customer.gstin || "");
     fd.append("customer_pan", customer.pan || "");
     fd.append("customer_address", customer.address || "");
+    fd.append("extra_recipients", extraRecipients || "");
     fd.append("currency", currency);
     fd.append("issue_date", issueDate);
     fd.append("total", String(num(uploadTotal, 0)));
@@ -397,11 +416,14 @@ export default function NewInvoice() {
         router.push("/portal/invoices");
         return;
       }
+      // No explicit `to`: the invoice was just saved with its recipient list
+      // (customer + anyone under "Also send to"), and the route sends to all
+      // of them — the same list a re-send from the list page will use.
       const sendRes = await fetch(`/api/invoices/${created.id}/send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ to: customer.email, message: message || undefined }),
+        body: JSON.stringify({ message: message || undefined }),
       });
       const sendJson = await sendRes.json().catch(() => ({}));
       if (!sendRes.ok) {
@@ -411,7 +433,10 @@ export default function NewInvoice() {
           variant: "destructive",
         });
       } else {
-        toast({ title: "Proforma Invoice sent", description: `Emailed to ${sendJson.to}` });
+        toast({
+          title: "Proforma Invoice sent",
+          description: `Emailed to ${(sendJson.recipients || [sendJson.to]).join(", ")}`,
+        });
       }
       router.push("/portal/invoices");
     } catch (e: any) {
@@ -464,6 +489,83 @@ export default function NewInvoice() {
           </p>
         </div>
       </div>
+    </section>
+  );
+
+  // Your own company (manual mode), pre-filled from settings. This is what
+  // prints as the "Communication Address" block at the top left of the PDF;
+  // editing it here changes this one invoice, not the saved settings.
+  const SellerCard = (
+    <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">Your company (prints as the address block)</h2>
+        <a href="/portal/invoices/settings" className="text-xs text-gray-400 hover:text-emerald-400 underline">
+          Save as defaults →
+        </a>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>Company name</label>
+          <input
+            className={inputCls}
+            value={seller.company}
+            onChange={(e) => setSeller({ ...seller, company: e.target.value })}
+            placeholder="RACE INNOVATIONS PVT LTD"
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Email</label>
+          <input
+            className={inputCls}
+            value={seller.email}
+            onChange={(e) => setSeller({ ...seller, email: e.target.value })}
+            placeholder="enquiry@raceinnovations.in"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className={labelCls}>Communication address</label>
+          <textarea
+            className={inputCls}
+            rows={3}
+            value={seller.address}
+            onChange={(e) => setSeller({ ...seller, address: e.target.value })}
+            placeholder={"Office No : 928, Regus Olympia Platina\n9th Floor, Plot No : 33-B South Phase\nGuindy Industrial Estate, Chennai 600032"}
+          />
+          <p className="text-xs text-gray-500 mt-1">One line per line — it prints exactly as typed.</p>
+        </div>
+        <div>
+          <label className={labelCls}>GSTIN</label>
+          <input
+            className={inputCls}
+            value={seller.gstin}
+            onChange={(e) => setSeller({ ...seller, gstin: e.target.value.toUpperCase() })}
+            placeholder="33AAFCR6885E1Z6"
+          />
+        </div>
+        <div>
+          <label className={labelCls}>PAN</label>
+          <input
+            className={inputCls}
+            value={seller.pan}
+            onChange={(e) => setSeller({ ...seller, pan: e.target.value.toUpperCase() })}
+            placeholder="AAFCR6885E"
+            maxLength={10}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Phone (optional)</label>
+          <input
+            className={inputCls}
+            value={seller.phone}
+            onChange={(e) => setSeller({ ...seller, phone: e.target.value })}
+            placeholder="+91 44 4000 0000"
+          />
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 mt-3">
+        Pre-filled from your invoice settings. Changes here apply to this invoice only; blank fields fall back to
+        the saved settings.
+      </p>
     </section>
   );
 
@@ -564,6 +666,19 @@ export default function NewInvoice() {
           <label className={labelCls}>Email</label>
           <input className={inputCls} type="email" value={customer.email} onChange={(e) => setCustomer({ ...customer, email: e.target.value })} placeholder="buyer@acme.com" />
         </div>
+        <div className="md:col-span-2">
+          <label className={labelCls}>Also send to (optional)</label>
+          <input
+            className={inputCls}
+            value={extraRecipients}
+            onChange={(e) => setExtraRecipients(e.target.value)}
+            placeholder="billing@acme.com, procurement@acme.com"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Separate addresses with commas — everyone here gets the same email and PDF, on this send and on every
+            re-send.
+          </p>
+        </div>
         <div>
           <label className={labelCls}>Phone (optional)</label>
           <PhoneInput
@@ -614,9 +729,10 @@ export default function NewInvoice() {
 
         {sellerGaps.length > 0 && (
           <div className="mb-6 rounded-lg border border-amber-800/60 bg-amber-950/40 p-4 text-sm text-amber-200">
-            Your {sellerGaps.join(", ")} {sellerGaps.length > 1 ? "are" : "is"} not set, so the
-            &ldquo;Communication Address&rdquo; block on the invoice will print incomplete. Add{" "}
-            {sellerGaps.length > 1 ? "them" : "it"} under{" "}
+            Your {sellerGaps.join(", ")} {sellerGaps.length > 1 ? "are" : "is"} not saved in your invoice
+            settings, so the &ldquo;Communication Address&rdquo; block would print incomplete. Fill{" "}
+            {sellerGaps.length > 1 ? "them" : "it"} in under <b>Your company</b> below for this invoice, or save{" "}
+            {sellerGaps.length > 1 ? "them" : "it"} once under{" "}
             <a href="/portal/invoices/settings" className="underline hover:text-amber-100">
               invoice settings
             </a>
@@ -626,6 +742,7 @@ export default function NewInvoice() {
 
         <div className="space-y-6">
           {mode === "manual" && InvoiceMetaCard}
+          {mode === "manual" && SellerCard}
           {CustomerCard}
 
           {mode === "manual" ? (

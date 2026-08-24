@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { loadInvoiceWithItems } from "@/lib/invoiceRepo";
-import { normalizeItems, computeTotals, num } from "@/lib/invoices";
+import {
+  normalizeItems,
+  computeTotals,
+  num,
+  parseRecipients,
+  MAX_INVOICE_RECIPIENTS,
+} from "@/lib/invoices";
 
 
 export const dynamic = "force-dynamic";
@@ -88,6 +94,30 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       sets.push(`${col} = ?`);
       vals.push(s(body[key], max ?? 255));
     }
+  }
+
+  // The extra people this invoice is emailed to — normalised, de-duplicated,
+  // and never a repeat of the customer of record.
+  if ("extra_recipients" in body) {
+    const parsed = parseRecipients(body.extra_recipients);
+    if (parsed.invalid.length) {
+      return NextResponse.json(
+        { error: `Not a valid email address: ${parsed.invalid.join(", ")}` },
+        { status: 400 }
+      );
+    }
+    const primary = String(
+      ("customer_email" in body ? body.customer_email : found.invoice.customer_email) || ""
+    )
+      .trim()
+      .toLowerCase();
+    sets.push("extra_recipients = ?");
+    vals.push(
+      parsed.valid
+        .filter((e) => e !== primary)
+        .slice(0, MAX_INVOICE_RECIPIENTS - 1)
+        .join(", ") || null
+    );
   }
 
   if ("issue_date" in body && /^\d{4}-\d{2}-\d{2}$/.test(String(body.issue_date || ""))) {

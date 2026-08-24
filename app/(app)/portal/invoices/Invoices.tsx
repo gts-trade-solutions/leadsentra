@@ -17,6 +17,8 @@ type InvoiceRow = {
   customer_name: string | null;
   customer_company: string | null;
   customer_email: string | null;
+  /** Additional addresses this invoice is emailed to, comma-separated. */
+  extra_recipients?: string | null;
   currency: string;
   total: string | number;
   issue_date: string;
@@ -31,6 +33,9 @@ export default function InvoicesPage() {
   const [rows, setRows] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  /** The invoice whose send dialog is open, and the addresses it will go to. */
+  const [sendRow, setSendRow] = useState<InvoiceRow | null>(null);
+  const [sendTo, setSendTo] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,27 +54,42 @@ export default function InvoicesPage() {
     load();
   }, [load]);
 
-  async function sendInvoice(row: InvoiceRow) {
-    if (!row.customer_email) {
+  /** Everyone an invoice currently goes to: customer of record first. */
+  function recipientsOf(row: InvoiceRow): string {
+    return [row.customer_email, row.extra_recipients].filter(Boolean).join(", ");
+  }
+
+  // Sending opens the dialog rather than firing straight away, so the list of
+  // people it goes to can be checked — and added to — before it leaves.
+  function openSend(row: InvoiceRow) {
+    setSendRow(row);
+    setSendTo(recipientsOf(row));
+  }
+
+  async function confirmSend() {
+    const row = sendRow;
+    if (!row) return;
+    if (!sendTo.trim()) {
       toast({
-        title: "No customer email",
-        description: "Open the proforma invoice and add a customer email before sending.",
+        title: "No recipients",
+        description: "Add at least one email address to send to.",
         variant: "destructive",
       });
       return;
     }
-    if (!confirm(`Send proforma invoice ${row.invoice_number} to ${row.customer_email}?`)) return;
     setBusyId(row.id);
     try {
       const res = await fetch(`/api/invoices/${row.id}/send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({}),
+        body: JSON.stringify({ to: sendTo }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Send failed");
-      toast({ title: "Proforma Invoice sent", description: `Emailed to ${json.to}` });
+      const went: string[] = json.recipients || [json.to];
+      toast({ title: "Proforma Invoice sent", description: `Emailed to ${went.join(", ")}` });
+      setSendRow(null);
       load();
     } catch (e: any) {
       toast({ title: "Could not send", description: e?.message || String(e), variant: "destructive" });
@@ -194,7 +214,10 @@ export default function InvoicesPage() {
                         <div className="text-xs text-gray-400">{r.customer_name}</div>
                       )}
                       {r.customer_email && (
-                        <div className="text-xs text-gray-500">{r.customer_email}</div>
+                        <div className="text-xs text-gray-500">
+                          {r.customer_email}
+                          {r.extra_recipients ? ` +${r.extra_recipients.split(",").filter(Boolean).length} more` : ""}
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-200 tabular-nums">
@@ -231,7 +254,7 @@ export default function InvoicesPage() {
                           <Download className="w-4 h-4" />
                         </a>
                         <button
-                          onClick={() => sendInvoice(r)}
+                          onClick={() => openSend(r)}
                           disabled={busyId === r.id}
                           title="Send to customer"
                           className="p-2 rounded-lg hover:bg-gray-700 text-emerald-400 disabled:opacity-50"
@@ -260,6 +283,55 @@ export default function InvoicesPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {sendRow && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => busyId !== sendRow.id && setSendRow(null)}
+          >
+            <div
+              className="w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-sm font-semibold text-white mb-1">
+                Send proforma invoice {sendRow.invoice_number}
+              </h2>
+              <p className="text-xs text-gray-500 mb-4">
+                The PDF goes to everyone listed here. Separate addresses with commas — up to 10.
+              </p>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Send to</label>
+              <textarea
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-emerald-600"
+                rows={3}
+                value={sendTo}
+                onChange={(e) => setSendTo(e.target.value)}
+                placeholder="buyer@acme.com, billing@acme.com"
+                autoFocus
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                The first address is kept as this invoice&apos;s customer of record; the rest are saved with it and
+                used again on the next send.
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  onClick={() => setSendRow(null)}
+                  disabled={busyId === sendRow.id}
+                  className="px-3 py-2 rounded-lg text-sm text-gray-300 bg-gray-800 border border-gray-700 hover:border-gray-600 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmSend}
+                  disabled={busyId === sendRow.id}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4" />
+                  {busyId === sendRow.id ? "Sending…" : "Send"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

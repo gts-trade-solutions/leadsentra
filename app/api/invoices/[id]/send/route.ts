@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isEmailShape } from "@/lib/suppressions";
+import { parseRecipients, MAX_INVOICE_RECIPIENTS } from "@/lib/invoices";
 import { loadInvoiceWithItems, toPdfData, loadInvoiceAssets } from "@/lib/invoiceRepo";
 import { generateInvoicePdf } from "@/lib/invoicePdf";
 import { buildInvoiceEmail } from "@/lib/invoiceEmail";
@@ -93,35 +94,31 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
   const body = await req.json().catch(() => ({}));
 
-  // Recipients: explicit override, else the invoice's saved customer email.
-  // Accepts an array or a comma/semicolon-separated string, so an invoice can
-  // go to billing and procurement together rather than one address only.
-  const MAX_RECIPIENTS = 10;
-  const rawTo = body.to ?? found.invoice.customer_email ?? "";
-  const recipients = Array.from(
-    new Set(
-      (Array.isArray(rawTo) ? rawTo : String(rawTo).split(/[,;]/))
-        .map((t: any) => String(t).trim().toLowerCase())
-        .filter(Boolean)
-    )
+  // Recipients: an explicit override, else the invoice's own list — the
+  // customer of record first, then everyone it was saved to reach (billing,
+  // procurement, whoever asked for it). Accepts an array or a
+  // comma/semicolon-separated string.
+  const explicit = body.to !== undefined && body.to !== null && body.to !== "";
+  const parsed = parseRecipients(
+    explicit ? body.to : [found.invoice.customer_email, found.invoice.extra_recipients]
   );
 
-  const invalid = recipients.filter((t) => !isEmailShape(t));
-  if (invalid.length) {
+  if (parsed.invalid.length) {
     return NextResponse.json(
-      { error: `Not a valid email address: ${invalid.join(", ")}` },
+      { error: `Not a valid email address: ${parsed.invalid.join(", ")}` },
       { status: 400 }
     );
   }
+  const recipients = parsed.valid;
   if (!recipients.length) {
     return NextResponse.json(
       { error: "A valid customer email is required to send the invoice." },
       { status: 400 }
     );
   }
-  if (recipients.length > MAX_RECIPIENTS) {
+  if (recipients.length > MAX_INVOICE_RECIPIENTS) {
     return NextResponse.json(
-      { error: `Too many recipients (max ${MAX_RECIPIENTS}).` },
+      { error: `Too many recipients (max ${MAX_INVOICE_RECIPIENTS}).` },
       { status: 400 }
     );
   }
@@ -139,15 +136,19 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     );
   }
 
-  // Persist the recipient if it changed / was missing, so re-sends and the PDF
-  // stay consistent with what we actually sent to.
-  if (to !== (found.invoice.customer_email || "").toLowerCase()) {
-    await db.execute("UPDATE proforma_invoices SET customer_email = ? WHERE id = ? AND user_id = ?", [
-      to,
-      params.id,
-      session.id,
-    ]);
+  // Persist the recipients if they changed / were missing, so a re-send from
+  // the list goes to the same people this send did.
+  const extras = recipients.slice(1).join(", ") || null;
+  if (
+    to !== (found.invoice.customer_email || "").toLowerCase() ||
+    extras !== (found.invoice.extra_recipients || null)
+  ) {
+    await db.execute(
+      "UPDATE proforma_invoices SET customer_email = ?, extra_recipients = ? WHERE id = ? AND user_id = ?",
+      [to, extras, params.id, session.id]
+    );
     found.invoice.customer_email = to;
+    found.invoice.extra_recipients = extras;
   }
 
   // Get the PDF bytes: the uploaded file for 'upload' invoices, else generate.

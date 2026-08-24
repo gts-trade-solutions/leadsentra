@@ -35,6 +35,8 @@ export type InvoiceRecord = {
   customer_company_id: string | null;
   customer_name: string | null;
   customer_email: string | null;
+  /** Additional addresses this invoice is emailed to, comma-separated. */
+  extra_recipients: string | null;
   customer_phone: string | null;
   customer_company: string | null;
   customer_gstin: string | null;
@@ -112,6 +114,7 @@ function mapInvoice(row: any): InvoiceRecord {
     customer_company_id: row.customer_company_id,
     customer_name: row.customer_name,
     customer_email: row.customer_email,
+    extra_recipients: row.extra_recipients ?? null,
     customer_phone: row.customer_phone,
     customer_company: row.customer_company,
     customer_gstin: row.customer_gstin,

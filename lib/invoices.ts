@@ -150,6 +150,37 @@ export async function nextInvoiceNumber(
   return `PI-${year}-${String(next).padStart(4, "0")}`;
 }
 
+/**
+ * How many addresses one proforma invoice may be emailed to at once. Enough
+ * for billing + procurement + the person who asked for it; low enough that the
+ * send never turns into a mailshot.
+ */
+export const MAX_INVOICE_RECIPIENTS = 10;
+
+/** Email shape test, kept here so this module stays free of DB imports — it is
+ *  bundled into the client-side invoice builder. Mirrors lib/suppressions. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Split a recipient list — "billing@x.com, buyer@x.com; ops@x.com", or an
+ * array — into lower-cased, de-duplicated addresses, keeping anything that
+ * isn't address-shaped so the caller can name the entry that's wrong rather
+ * than silently dropping it.
+ */
+export function parseRecipients(raw: unknown): { valid: string[]; invalid: string[] } {
+  const parts = (Array.isArray(raw) ? raw : String(raw ?? "").split(/[,;\s]+/))
+    .flatMap((t) => String(t ?? "").split(/[,;\s]+/))
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  for (const p of parts) {
+    if (!EMAIL_RE.test(p)) invalid.push(p);
+    else if (!valid.includes(p)) valid.push(p);
+  }
+  return { valid, invalid };
+}
+
 /** Currency symbol for the small set we surface in the UI. */
 export function currencySymbol(code: string): string {
   switch ((code || "INR").toUpperCase()) {

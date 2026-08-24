@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   }
 
   const [rows] = await db.execute(
-    `SELECT id, invoice_number, status, source, customer_name, customer_company, customer_email,
+    `SELECT id, invoice_number, status, source, customer_name, customer_company, customer_email, extra_recipients,
             currency, total,
             DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
             DATE_FORMAT(valid_until, '%Y-%m-%d') AS valid_until,
