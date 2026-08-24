@@ -17,6 +17,13 @@ import {
   billToSummary,
   type BillToAddress,
 } from "@/lib/billTo";
+import {
+  companyBankFields,
+  companyProfileLabel,
+  companySellerFields,
+  hasBankDetails,
+  type CompanyProfile,
+} from "@/lib/companyProfiles";
 
 type ContactOpt = {
   id: string;
@@ -93,6 +100,9 @@ export default function NewInvoice() {
   const [saveBankDefault, setSaveBankDefault] = useState(false);
   /** Your own company — prints as the "Communication Address" block on the PDF. */
   const [seller, setSeller] = useState({ company: "", address: "", gstin: "", pan: "", email: "", phone: "" });
+  /** The companies this user can invoice as, and which one this invoice uses. */
+  const [companies, setCompanies] = useState<CompanyProfile[]>([]);
+  const [companyId, setCompanyId] = useState("");
   /** Seller details missing from the invoice settings, named for the warning. */
   const [sellerGaps, setSellerGaps] = useState<string[]>([]);
   /** Extra people this invoice is emailed to, alongside the customer. */
@@ -161,53 +171,52 @@ export default function NewInvoice() {
     return () => window.removeEventListener("focus", onFocus);
   }, [loadBillTo]);
 
-  // Pre-fill the bank block from the saved invoice settings; it stays editable
-  // so a one-off invoice can be issued against a different account.
+  /**
+   * Fill the "Your company" and bank blocks from one of the user's saved
+   * companies. Everything stays editable: the change applies to this invoice
+   * only, and the saved company is untouched.
+   */
+  const applyCompany = useCallback((c: CompanyProfile) => {
+    setCompanyId(c.id);
+    setSeller(companySellerFields(c));
+    setBank(companyBankFields(c));
+    // Nothing saved to fall back on yet: offer to keep whatever is typed here,
+    // so this is the last invoice that needs it typed at all.
+    setSaveBankDefault(!hasBankDetails(c));
+    setSellerGaps(
+      [
+        ["seller_company", "company name"],
+        ["seller_address", "communication address"],
+        ["email", "email"],
+      ]
+        .filter(([k]) => !String((c as any)[k] || "").trim())
+        .map(([, label]) => label as string)
+    );
+  }, []);
+
+  // Pre-fill from the default company; it stays editable so a one-off invoice
+  // can be issued against different details.
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/invoices/settings", { cache: "no-store", credentials: "same-origin" });
+        const res = await fetch("/api/invoices/companies", { cache: "no-store", credentials: "same-origin" });
         const json = await res.json().catch(() => ({}));
-        const s = json?.settings;
+        const list: CompanyProfile[] = Array.isArray(json?.data) ? json.data : [];
+        setCompanies(list);
         // Nothing saved means the "Your company" block below starts empty, and
         // an invoice sent that way has a blank "Communication Address". Say so
         // up front rather than after it has gone out.
-        const missing = [
-          ["seller_company", "company name"],
-          ["seller_address", "communication address"],
-          ["email", "email"],
-        ].filter(([k]) => !String(s?.[k as string] || "").trim()).map(([, label]) => label as string);
-        setSellerGaps(missing);
-        if (!s) {
-          // No settings row at all — nothing saved, so offer to keep the bank
-          // details entered on this invoice.
+        if (!list.length) {
+          setSellerGaps(["company name", "communication address", "email"]);
           setSaveBankDefault(true);
           return;
         }
-        setSeller({
-          company: s.seller_company || "",
-          address: s.seller_address || "",
-          gstin: s.gstin || "",
-          pan: s.pan || "",
-          email: s.email || "",
-          phone: s.phone || "",
-        });
-        setBank({
-          name: s.bank_name || "",
-          account: s.bank_account || "",
-          branch: s.bank_branch || "",
-          ifsc: s.bank_ifsc || "",
-        });
-        // Nothing saved to fall back on yet: offer to keep whatever is typed
-        // here, so this is the last invoice that needs it typed at all.
-        setSaveBankDefault(
-          ![s.bank_name, s.bank_account, s.bank_branch, s.bank_ifsc].some((v) => String(v || "").trim())
-        );
+        applyCompany(list[0]);
       } catch {
-        /* settings are optional — the fields just stay blank */
+        /* companies are optional — the fields just stay blank */
       }
     })();
-  }, []);
+  }, [applyCompany]);
 
   const contactLabel = useCallback(
     (c: ContactOpt) => [c.name, c.company, c.email].filter(Boolean).join(" · ") || c.id,
@@ -377,6 +386,9 @@ export default function NewInvoice() {
       // instead of capturing a near-duplicate of a row it already holds.
       bill_to_id: selectedBillTo || null,
       extra_recipients: extraRecipients || null,
+      // Which of your companies is issuing this — decides the logo, signature
+      // and invoice-number series.
+      company_profile_id: companyId || null,
       seller_company: seller.company || null,
       seller_address: seller.address || null,
       seller_gstin: seller.gstin || null,
@@ -451,6 +463,7 @@ export default function NewInvoice() {
     fd.append("customer_pan", customer.pan || "");
     fd.append("customer_address", customer.address || "");
     fd.append("bill_to_id", selectedBillTo || "");
+    fd.append("company_profile_id", companyId || "");
     fd.append("extra_recipients", extraRecipients || "");
     fd.append("currency", currency);
     fd.append("issue_date", issueDate);
@@ -603,10 +616,44 @@ export default function NewInvoice() {
     <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold text-white">Your company (prints as the address block)</h2>
-        <a href="/portal/invoices/settings" className="text-xs text-gray-400 hover:text-emerald-400 underline">
-          Save as defaults →
+        <a
+          href="/portal/invoices/settings"
+          target="_blank"
+          rel="noreferrer"
+          title="Opens in a new tab so this invoice isn't lost"
+          className="text-xs text-gray-400 hover:text-emerald-400 underline"
+        >
+          {companies.length ? "Add / edit companies →" : "Save as defaults →"}
         </a>
       </div>
+
+      {/* Which company is issuing this invoice. Picking one refills the block
+          below — address, tax numbers, bank, and the logo/signature the PDF
+          carries — so a second entity is set up once, then just chosen. */}
+      {companies.length > 1 && (
+        <div className="mb-4">
+          <label className={labelCls}>Issue this invoice as</label>
+          <select
+            className={inputCls}
+            value={companyId}
+            onChange={(e) => {
+              const picked = companies.find((c) => c.id === e.target.value);
+              if (picked) applyCompany(picked);
+            }}
+          >
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {companyProfileLabel(c)}
+                {c.is_default ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            Its logo, signature and invoice-number series are used for this invoice.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Company name</label>
@@ -1144,6 +1191,30 @@ export default function NewInvoice() {
             /* Upload mode */
             <section className="rounded-lg border border-gray-800 bg-gray-900 p-5 space-y-4">
               <h2 className="text-sm font-semibold text-white">Upload proforma PDF</h2>
+              {companies.length > 1 && (
+                <div>
+                  <label className={labelCls}>Issue this invoice as</label>
+                  <select
+                    className={inputCls}
+                    value={companyId}
+                    onChange={(e) => {
+                      const picked = companies.find((c) => c.id === e.target.value);
+                      if (picked) applyCompany(picked);
+                    }}
+                  >
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {companyProfileLabel(c)}
+                        {c.is_default ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    The PDF is attached as-is; this decides which company the invoice is recorded under and which
+                    number series it takes.
+                  </p>
+                </div>
+              )}
               <div>
                 <label className={labelCls}>PDF file</label>
                 <input

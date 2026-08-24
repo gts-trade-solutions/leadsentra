@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
 import { recordInvoiceBillTo } from "./billToRepo";
+import { resolveCompanyProfile, rememberBankDetails } from "./companyProfilesRepo";
 import {
   normalizeItems,
   computeTotals,
@@ -34,38 +35,6 @@ async function loadBillingProfile(userId: string) {
   return (rows as any[])[0] || null;
 }
 
-async function loadInvoiceSettings(userId: string) {
-  const [rows] = await db.execute("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1", [userId]);
-  return (rows as any[])[0] || null;
-}
-
-type BankDetails = { name: string | null; account: string | null; branch: string | null; ifsc: string | null };
-
-/**
- * Keep the bank block typed on an invoice as the user's default, so the next
- * invoice comes with it already filled in.
- *
- * Only writes the four bank columns — never the rest of the invoice settings —
- * and only when the form asked for it (the form asks by default while no
- * default exists yet). Never throws: a saved invoice must not be reported as
- * failed because its defaults could not be updated.
- */
-async function rememberBankDetails(userId: string, bank: BankDetails): Promise<void> {
-  if (![bank.name, bank.account, bank.branch, bank.ifsc].some((v) => String(v || "").trim())) return;
-  try {
-    await db.execute(
-      `INSERT INTO invoice_settings (user_id, bank_name, bank_account, bank_branch, bank_ifsc)
-       VALUES (?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE bank_name    = VALUES(bank_name),
-                               bank_account = VALUES(bank_account),
-                               bank_branch  = VALUES(bank_branch),
-                               bank_ifsc    = VALUES(bank_ifsc)`,
-      [userId, bank.name, bank.account, bank.branch, bank.ifsc]
-    );
-  } catch (e) {
-    console.warn("[invoices] could not save the bank details as defaults", e);
-  }
-}
 
 export type CreateInvoiceResult = { id: string; invoice_number: string };
 
@@ -105,9 +74,13 @@ export async function createProformaInvoice(
   const extraRecipients =
     extra.valid.filter((e) => e !== primary).slice(0, MAX_INVOICE_RECIPIENTS - 1).join(", ") || null;
 
+  // Which of the user's companies this invoice is issued as — the one the form
+  // picked, or their default. Everything the invoice snapshots (address block,
+  // bank, logo, signature, declaration, invoice prefix) comes from it.
+  const companyId = s(body.company_profile_id, 36);
   const [profile, settings] = await Promise.all([
     loadBillingProfile(userId),
-    loadInvoiceSettings(userId),
+    resolveCompanyProfile(userId, companyId),
   ]);
 
   const seller = {
@@ -220,7 +193,7 @@ export async function createProformaInvoice(
 
     // Same for the bank block: typed once on an invoice, it becomes the
     // default the next invoice starts from.
-    if (body.save_bank_default) await rememberBankDetails(userId, bank);
+    if (body.save_bank_default) await rememberBankDetails(userId, settings?.id ?? null, bank);
 
     return { id, invoice_number: invoiceNumber };
   } catch (e: any) {

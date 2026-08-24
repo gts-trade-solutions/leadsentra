@@ -179,7 +179,7 @@ async function fillSellerBlanks(userId: string, invoice: InvoiceRecord): Promise
     }
   };
   const [settings, profile] = await Promise.all([
-    readOne("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1"),
+    readOne("SELECT * FROM invoice_settings WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1"),
     readOne(
       "SELECT full_name, email, phone, company, gstin, address FROM billing_profiles WHERE user_id = ? LIMIT 1"
     ),

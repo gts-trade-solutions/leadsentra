@@ -70,7 +70,7 @@ export async function POST(req: Request) {
 
   // Optional seller offer-number prefix.
   const [settingsRows] = await db.execute(
-    "SELECT offer_prefix, invoice_prefix FROM invoice_settings WHERE user_id = ? LIMIT 1",
+    "SELECT offer_prefix, invoice_prefix FROM invoice_settings WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1",
     [session.id]
   );
   const settings = (settingsRows as any[])[0] || null;

@@ -5,6 +5,7 @@ import { getUser } from "@/lib/auth";
 import { nextInvoiceNumber, num, parseRecipients, MAX_INVOICE_RECIPIENTS } from "@/lib/invoices";
 import { saveInvoiceFile } from "@/lib/invoiceUpload";
 import { recordInvoiceBillTo } from "@/lib/billToRepo";
+import { resolveCompanyProfile } from "@/lib/companyProfilesRepo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,11 +64,8 @@ export async function POST(req: Request) {
     ? String(form.get("issue_date"))
     : new Date().toISOString().slice(0, 10);
 
-  const [settingsRows] = await db.execute(
-    "SELECT seller_company, seller_address, gstin, pan, email, phone, invoice_prefix FROM invoice_settings WHERE user_id = ? LIMIT 1",
-    [session.id]
-  );
-  const settings = (settingsRows as any[])[0] || null;
+  // The company this PDF is issued as — the one the form picked, or the default.
+  const settings = await resolveCompanyProfile(session.id, f(form, "company_profile_id", 36));
 
   const id = randomUUID();
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();

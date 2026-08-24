@@ -125,29 +125,50 @@ export async function nextInvoiceNumber(
   year: number,
   prefix?: string | null
 ): Promise<string> {
+  // The counter runs per prefix, so a user invoicing as two companies gets an
+  // unbroken series for each instead of one shared series with gaps in both.
+  const clean = (prefix || "").trim().replace(/[\/]+$/, "");
+  const prefixKey = clean.slice(0, 64);
+  const format = (n: number) =>
+    clean
+      ? // e.g. "RIPL/PI" -> "RIPL/PI/2026/09"
+        `${clean}/${year}/${String(n).padStart(2, "0")}`
+      : `PI-${year}-${String(n).padStart(4, "0")}`;
+
   // Ensure the counter row exists, then lock + read + bump it.
   await conn.execute(
-    `INSERT INTO proforma_invoice_seq (user_id, yr, last_seq)
-       VALUES (?, ?, 0)
+    `INSERT INTO proforma_invoice_seq (user_id, prefix_key, yr, last_seq)
+       VALUES (?, ?, ?, 0)
      ON DUPLICATE KEY UPDATE user_id = user_id`,
-    [userId, year]
+    [userId, prefixKey, year]
   );
   const [rows] = await conn.execute(
-    "SELECT last_seq FROM proforma_invoice_seq WHERE user_id = ? AND yr = ? FOR UPDATE",
-    [userId, year]
+    "SELECT last_seq FROM proforma_invoice_seq WHERE user_id = ? AND prefix_key = ? AND yr = ? FOR UPDATE",
+    [userId, prefixKey, year]
   );
   const last = Number((rows as any[])[0]?.last_seq || 0);
-  const next = last + 1;
-  await conn.execute(
-    "UPDATE proforma_invoice_seq SET last_seq = ? WHERE user_id = ? AND yr = ?",
-    [next, userId, year]
-  );
-  const clean = (prefix || "").trim().replace(/[\/]+$/, "");
-  if (clean) {
-    // e.g. "RIPL/PI" -> "RIPL/PI/2026/09"
-    return `${clean}/${year}/${String(next).padStart(2, "0")}`;
+
+  // Skip numbers already issued. A counter that starts fresh — a new company,
+  // or a prefix used before the per-prefix counters existed — can otherwise
+  // land on a number the user already has, and (user_id, invoice_number) is
+  // unique, so the whole invoice would fail to save.
+  let next = last;
+  let number = format(next + 1);
+  for (let i = 0; i < 200; i++) {
+    next += 1;
+    number = format(next);
+    const [taken] = await conn.execute(
+      "SELECT 1 FROM proforma_invoices WHERE user_id = ? AND invoice_number = ? LIMIT 1",
+      [userId, number]
+    );
+    if (!(taken as any[]).length) break;
   }
-  return `PI-${year}-${String(next).padStart(4, "0")}`;
+
+  await conn.execute(
+    "UPDATE proforma_invoice_seq SET last_seq = ? WHERE user_id = ? AND prefix_key = ? AND yr = ?",
+    [next, userId, prefixKey, year]
+  );
+  return number;
 }
 
 /**

@@ -4,6 +4,7 @@ import { getUser } from "@/lib/auth";
 import { normalizeItems, computeTotals, num } from "@/lib/invoices";
 import { generateInvoicePdf, type InvoicePdfData } from "@/lib/invoicePdf";
 import { readPublicFile } from "@/lib/invoiceUpload";
+import { resolveCompanyProfile } from "@/lib/companyProfilesRepo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -42,7 +43,13 @@ export async function POST(req: Request) {
       "SELECT full_name, email, phone, company, gstin, address FROM billing_profiles WHERE user_id = ? LIMIT 1",
       "billing_profiles"
     ),
-    readOne("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1", "invoice_settings"),
+    // The company the form is issuing as, so the preview carries that
+    // company's logo, signature and invoice-number prefix — not the default
+    // company's, which would show the wrong letterhead.
+    resolveCompanyProfile(session.id, s(body.company_profile_id, 36)).catch((e) => {
+      console.error("[invoices] preview could not read invoice_settings", e);
+      return null;
+    }),
   ]);
 
   const items = normalizeItems(body.items);

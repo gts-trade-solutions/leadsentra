@@ -140,7 +140,7 @@ export type SellerIdentity = {
 /** Read the seller identity from invoice_settings (+ billing profile fallback). */
 export async function loadSellerIdentity(userId: string): Promise<SellerIdentity> {
   const [settingsRows, profileRows] = await Promise.all([
-    db.execute("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1", [userId]),
+    db.execute("SELECT * FROM invoice_settings WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1", [userId]),
     db.execute("SELECT company, email, phone, address FROM billing_profiles WHERE user_id = ? LIMIT 1", [userId]),
   ]);
   const s = (settingsRows[0] as any[])[0] || null;
