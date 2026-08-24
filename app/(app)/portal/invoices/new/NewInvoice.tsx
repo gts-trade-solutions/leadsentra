@@ -84,6 +84,13 @@ export default function NewInvoice() {
   const [taxRate, setTaxRate] = useState("18");
   const [igstRate, setIgstRate] = useState("18");
   const [bank, setBank] = useState({ name: "", account: "", branch: "", ifsc: "" });
+  /**
+   * Whether this invoice's bank block should become the saved default. On by
+   * default until a default exists, so the details are typed once and every
+   * later invoice starts with them; off once they are saved, so a one-off
+   * account used for a single invoice doesn't quietly replace them.
+   */
+  const [saveBankDefault, setSaveBankDefault] = useState(false);
   /** Your own company — prints as the "Communication Address" block on the PDF. */
   const [seller, setSeller] = useState({ company: "", address: "", gstin: "", pan: "", email: "", phone: "" });
   /** Seller details missing from the invoice settings, named for the warning. */
@@ -171,7 +178,12 @@ export default function NewInvoice() {
           ["email", "email"],
         ].filter(([k]) => !String(s?.[k as string] || "").trim()).map(([, label]) => label as string);
         setSellerGaps(missing);
-        if (!s) return;
+        if (!s) {
+          // No settings row at all — nothing saved, so offer to keep the bank
+          // details entered on this invoice.
+          setSaveBankDefault(true);
+          return;
+        }
         setSeller({
           company: s.seller_company || "",
           address: s.seller_address || "",
@@ -186,6 +198,11 @@ export default function NewInvoice() {
           branch: s.bank_branch || "",
           ifsc: s.bank_ifsc || "",
         });
+        // Nothing saved to fall back on yet: offer to keep whatever is typed
+        // here, so this is the last invoice that needs it typed at all.
+        setSaveBankDefault(
+          ![s.bank_name, s.bank_account, s.bank_branch, s.bank_ifsc].some((v) => String(v || "").trim())
+        );
       } catch {
         /* settings are optional — the fields just stay blank */
       }
@@ -379,6 +396,8 @@ export default function NewInvoice() {
       bank_account: bank.account || null,
       bank_branch: bank.branch || null,
       bank_ifsc: bank.ifsc || null,
+      // Keep this bank block as the default the next invoice starts from.
+      save_bank_default: saveBankDefault,
       notes: notes || null,
       terms: terms || null,
       items: items.map((it) => ({
@@ -681,6 +700,21 @@ export default function NewInvoice() {
           <input className={inputCls} value={bank.ifsc} onChange={(e) => setBank({ ...bank, ifsc: e.target.value })} placeholder="HDFC0001234" />
         </div>
       </div>
+      <label className="mt-4 flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-800 accent-emerald-600"
+          checked={saveBankDefault}
+          onChange={(e) => setSaveBankDefault(e.target.checked)}
+        />
+        <span className="text-xs text-gray-400">
+          Remember these as my bank details
+          <span className="block text-gray-500">
+            Every later invoice starts with them already filled in. Leave it off to use a different account for this
+            invoice only.
+          </span>
+        </span>
+      </label>
       <p className="text-xs text-gray-500 mt-3">
         These print in the BANK DETAILS band on the proforma invoice and in the email body. Blank fields fall back to
         your saved invoice settings.

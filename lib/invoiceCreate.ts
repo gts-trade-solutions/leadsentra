@@ -39,6 +39,34 @@ async function loadInvoiceSettings(userId: string) {
   return (rows as any[])[0] || null;
 }
 
+type BankDetails = { name: string | null; account: string | null; branch: string | null; ifsc: string | null };
+
+/**
+ * Keep the bank block typed on an invoice as the user's default, so the next
+ * invoice comes with it already filled in.
+ *
+ * Only writes the four bank columns — never the rest of the invoice settings —
+ * and only when the form asked for it (the form asks by default while no
+ * default exists yet). Never throws: a saved invoice must not be reported as
+ * failed because its defaults could not be updated.
+ */
+async function rememberBankDetails(userId: string, bank: BankDetails): Promise<void> {
+  if (![bank.name, bank.account, bank.branch, bank.ifsc].some((v) => String(v || "").trim())) return;
+  try {
+    await db.execute(
+      `INSERT INTO invoice_settings (user_id, bank_name, bank_account, bank_branch, bank_ifsc)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE bank_name    = VALUES(bank_name),
+                               bank_account = VALUES(bank_account),
+                               bank_branch  = VALUES(bank_branch),
+                               bank_ifsc    = VALUES(bank_ifsc)`,
+      [userId, bank.name, bank.account, bank.branch, bank.ifsc]
+    );
+  } catch (e) {
+    console.warn("[invoices] could not save the bank details as defaults", e);
+  }
+}
+
 export type CreateInvoiceResult = { id: string; invoice_number: string };
 
 export async function createProformaInvoice(
@@ -189,6 +217,10 @@ export async function createProformaInvoice(
     // next invoice for them needs nothing but their email picked. Silent by
     // design — the address book must never turn a saved invoice into an error.
     await recordInvoiceBillTo(userId, s(body.bill_to_id, 36), customer);
+
+    // Same for the bank block: typed once on an invoice, it becomes the
+    // default the next invoice starts from.
+    if (body.save_bank_default) await rememberBankDetails(userId, bank);
 
     return { id, invoice_number: invoiceNumber };
   } catch (e: any) {
