@@ -140,6 +140,57 @@ function mapInvoice(row: any): InvoiceRecord {
   };
 }
 
+/**
+ * Fill in the seller's own details on an invoice that was saved without them.
+ *
+ * The seller block is snapshotted at create time, so an invoice raised before
+ * the company name / address / GSTIN were filled in under Invoice Settings
+ * prints an empty "Communication Address" forever — the settings page appears
+ * to do nothing. Blanks (and only blanks) are topped up from the current
+ * settings and billing profile at read time; anything the invoice already
+ * carries is left exactly as it was snapshotted.
+ */
+async function fillSellerBlanks(userId: string, invoice: InvoiceRecord): Promise<void> {
+  const blank = (v: string | null) => !String(v ?? "").trim();
+  const wanted: Array<[keyof InvoiceRecord, string, string]> = [
+    // [invoice field, invoice_settings column, billing_profiles column]
+    ["seller_company", "seller_company", "company"],
+    ["seller_name", "", "full_name"],
+    ["seller_email", "email", "email"],
+    ["seller_phone", "phone", "phone"],
+    ["seller_gstin", "gstin", "gstin"],
+    ["seller_pan", "pan", ""],
+    ["seller_address", "seller_address", "address"],
+    ["declaration", "declaration", ""],
+    ["signatory_name", "signatory_name", ""],
+  ];
+  if (!wanted.some(([f]) => blank(invoice[f] as string | null))) return;
+
+  const readOne = async (sql: string) => {
+    try {
+      const [rows] = await db.execute(sql, [userId]);
+      return (rows as any[])[0] || null;
+    } catch {
+      // Settings are optional, and the table may not be migrated yet.
+      return null;
+    }
+  };
+  const [settings, profile] = await Promise.all([
+    readOne("SELECT * FROM invoice_settings WHERE user_id = ? LIMIT 1"),
+    readOne(
+      "SELECT full_name, email, phone, company, gstin, address FROM billing_profiles WHERE user_id = ? LIMIT 1"
+    ),
+  ]);
+  if (!settings && !profile) return;
+
+  for (const [field, settingsCol, profileCol] of wanted) {
+    if (!blank(invoice[field] as string | null)) continue;
+    const v =
+      (settingsCol && settings?.[settingsCol]) || (profileCol && profile?.[profileCol]) || null;
+    if (v) (invoice as any)[field] = String(v);
+  }
+}
+
 /** Load one invoice (scoped to the owning user) with its line items. */
 export async function loadInvoiceWithItems(
   userId: string,
@@ -166,7 +217,9 @@ export async function loadInvoiceWithItems(
     amount: num(r.amount),
   }));
 
-  return { invoice: mapInvoice(row), items };
+  const invoice = mapInvoice(row);
+  await fillSellerBlanks(userId, invoice);
+  return { invoice, items };
 }
 
 /** Read the invoice's logo/signature image bytes (if any) for the PDF. */

@@ -64,7 +64,10 @@ export async function createProformaInvoice(
   ]);
 
   const seller = {
-    name: s(body.seller_name) ?? (profile?.full_name || userEmail || null),
+    // Not userEmail: the login address is the seller's *email*, never their
+    // name, and falling back to it printed the address as the company heading
+    // on the PDF.
+    name: s(body.seller_name) ?? (profile?.full_name || null),
     email: s(body.seller_email) ?? (settings?.email || profile?.email || userEmail || null),
     phone: s(body.seller_phone, 64) ?? (settings?.phone || profile?.phone || null),
     company: s(body.seller_company) ?? (settings?.seller_company || profile?.company || null),

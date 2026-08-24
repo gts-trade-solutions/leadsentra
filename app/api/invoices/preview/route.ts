@@ -69,7 +69,8 @@ export async function POST(req: Request) {
     currency: (s(body.currency, 8) || "INR").toUpperCase(),
 
     seller_company: s(body.seller_company) ?? (settings?.seller_company || profile?.company || null),
-    seller_name: s(body.seller_name) ?? (profile?.full_name || session.email || null),
+    // The login address is the seller's email, not their name — see invoiceCreate.
+    seller_name: s(body.seller_name) ?? (profile?.full_name || null),
     seller_email: s(body.seller_email) ?? (settings?.email || profile?.email || session.email || null),
     seller_phone: s(body.seller_phone, 64) ?? (settings?.phone || profile?.phone || null),
     seller_gstin: s(body.seller_gstin, 32) ?? (settings?.gstin || profile?.gstin || null),

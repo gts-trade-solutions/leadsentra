@@ -134,7 +134,15 @@ export async function generateInvoicePdf(
   assets: InvoicePdfAssets = {}
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  doc.setTitle(`Proforma Invoice ${safe(data.invoice_number)}`);
+  // The subject is what the invoice is *about*, so it titles the document —
+  // it's what a browser tab shows when the PDF is previewed.
+  const docSubject = String(data.subject || "").trim();
+  doc.setTitle(
+    docSubject
+      ? `${safe(docSubject)} - ${safe(data.invoice_number)}`
+      : `Proforma Invoice ${safe(data.invoice_number)}`
+  );
+  if (docSubject) doc.setSubject(safe(docSubject));
   doc.setCreator("LeadSentra");
 
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -221,18 +229,19 @@ export async function generateInvoicePdf(
 
   // Who the invoice is from.
   //
-  // seller_name falls back to the account's login email when no billing profile
-  // name is set (see invoiceCreate), so the heading could end up printing the
-  // email address as the company — and then printing it a second time on the
-  // "Email :" line, and a third time under "For …". Prefer a value that is
-  // actually a name; only fall back to the email when there is nothing else,
-  // and in that case don't repeat it.
+  // An email address is not a company name. seller_name can hold the account's
+  // login email when no billing profile name is set, which printed the address
+  // as the heading here, again on the "Email :" line, and a third time under
+  // "For …". Anything email-shaped is ignored for the heading: it is either a
+  // real company/person name or nothing, and the address appears exactly once,
+  // on its own line, where the template expects it.
   const isEmailish = (v: string) => /\S+@\S+\.\S+/.test(v);
   const sellerEmail = String(data.seller_email || "").trim();
+  const sellerPhone = String(data.seller_phone || "").trim();
   const sellerIdentity =
     [data.seller_company, data.seller_name]
       .map((v) => String(v || "").trim())
-      .find((v) => v && !isEmailish(v)) || sellerEmail;
+      .find((v) => v && !isEmailish(v)) || "";
 
   // Pre-measure both columns to size the band.
   const sellerLines: Array<{ s: string; bold?: boolean; size?: number }> = [];
@@ -242,10 +251,10 @@ export async function generateInvoicePdf(
     if (piece.trim()) for (const wl of wrap(piece, font, 8, width * 0.5 - 12)) sellerLines.push({ s: wl });
   }
   if (data.seller_gstin) sellerLines.push({ s: `GSTIN : ${data.seller_gstin}` });
-  // Suppressed when the heading above already IS the email.
-  if (sellerEmail && sellerEmail !== sellerIdentity) {
-    sellerLines.push({ s: `Email : ${sellerEmail}` });
+  if (sellerEmail) {
+    for (const wl of wrap(`Email : ${sellerEmail}`, font, 8, width * 0.5 - 12)) sellerLines.push({ s: wl });
   }
+  if (sellerPhone) sellerLines.push({ s: `Phone : ${sellerPhone}` });
 
   const metaRowH = 14;
   // The label column is fixed-width, and "Mode/Terms of Payment" measures
@@ -328,18 +337,6 @@ export async function generateInvoicePdf(
   }
   y -= band2H;
 
-  // ---- Subject band (the "Sub:" line, like the offer letter) ----
-  if (data.subject && String(data.subject).trim()) {
-    const subLabel = "Sub : ";
-    const subLabelW = bold.widthOfTextAtSize(subLabel, 8.5);
-    const subLines = wrap(data.subject, font, 8.5, width - 12 - subLabelW);
-    const subH = subLines.length * 11 + 8;
-    box(left, y - subH, width, subH);
-    txt(subLabel, left + 6, y - 13, { size: 8.5, bold: true });
-    subLines.forEach((sl, i) => txt(sl, left + 6 + subLabelW, y - 13 - i * 11, { size: 8.5 }));
-    y -= subH;
-  }
-
   // ---- Items table ----
   const cSl = left;
   const cPart = left + 30;
@@ -374,19 +371,36 @@ export async function generateInvoicePdf(
   const tableTop = y;
   const rowPad = 5;
   const lineH = 10;
+  const titleLineH = 11;
+
+  // The invoice subject heads the description column as a bold title, the way
+  // the printed template carries "Route survey report" above the survey
+  // details — not as a separate "Sub :" strip above the table.
+  const subjectTitle = String(data.subject || "").trim();
 
   data.items.forEach((it, idx) => {
+    const tLines = idx === 0 && subjectTitle ? wrap(subjectTitle, bold, 8.5, descW) : [];
     const dLines = wrap(it.description, font, 8, descW);
-    const rowH = Math.max(dLines.length * lineH, lineH) + rowPad;
+    const rowH = Math.max(tLines.length * titleLineH + dLines.length * lineH, lineH) + rowPad;
     if (y - rowH < M + 150) newPage();
     const top = y;
     txt(String(idx + 1), cSl + 4, top - 9, { size: 8 });
     if (it.part_no) wrap(it.part_no, font, 7.5, cDesc - cPart - 6).forEach((pl, i) => txt(pl, cPart + 3, top - 9 - i * 9, { size: 7.5 }));
-    dLines.forEach((dl, i) => txt(dl, cDesc + 3, top - 9 - i * lineH, { size: 8 }));
+    let dy = top - 9;
+    tLines.forEach((tl) => { txt(tl, cDesc + 3, dy, { size: 8.5, bold: true }); dy -= titleLineH; });
+    dLines.forEach((dl) => { txt(dl, cDesc + 3, dy, { size: 8 }); dy -= lineH; });
     rtxt(pdfMoney(it.unit_price, data.currency), cAmt - 6, top - 9, { size: 8 });
     rtxt(pdfMoney(it.amount, data.currency), right - 4, top - 9, { size: 8, bold: true });
     y -= rowH;
   });
+
+  // A preview can be rendered before any line item exists — the title still
+  // belongs on the page.
+  if (!data.items.length && subjectTitle) {
+    const tLines = wrap(subjectTitle, bold, 8.5, descW);
+    tLines.forEach((tl, i) => txt(tl, cDesc + 3, y - 9 - i * titleLineH, { size: 8.5, bold: true }));
+    y -= tLines.length * titleLineH + rowPad;
+  }
 
   // Pad the table to a minimum height, then the tax/total rows live inside it.
   // The pad has to clear however many totals rows this invoice actually needs
@@ -452,8 +466,8 @@ export async function generateInvoicePdf(
   declLines.forEach((dl, i) => txt(dl, left + 6, y - 23 - i * 10, { size: 7.5, color: MUTED }));
 
   // Same identity as the header block, so the signatory line can't disagree
-  // with it (or print a bare "For " when only an email is on file).
-  txt(`For ${sellerIdentity}`, metaLabelX, y - 11, { size: 8.5, bold: true });
+  // with it — and no "For <an email address>" when no company name is on file.
+  if (sellerIdentity) txt(`For ${sellerIdentity}`, metaLabelX, y - 11, { size: 8.5, bold: true });
   if (signature) {
     const sw = 90;
     const sh = Math.min((signature.height / signature.width) * sw, 34);

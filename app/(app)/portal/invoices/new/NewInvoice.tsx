@@ -67,6 +67,8 @@ export default function NewInvoice() {
   const [taxRate, setTaxRate] = useState("18");
   const [igstRate, setIgstRate] = useState("18");
   const [bank, setBank] = useState({ name: "", account: "", branch: "", ifsc: "" });
+  /** Seller details missing from the invoice settings, named for the warning. */
+  const [sellerGaps, setSellerGaps] = useState<string[]>([]);
   const [ref, setRef] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [deliveryTerms, setDeliveryTerms] = useState("");
@@ -116,6 +118,16 @@ export default function NewInvoice() {
         const res = await fetch("/api/invoices/settings", { cache: "no-store", credentials: "same-origin" });
         const json = await res.json().catch(() => ({}));
         const s = json?.settings;
+        // The seller block on the PDF is filled entirely from these settings —
+        // there is no field for it on this form. Left empty, the invoice goes
+        // out with a blank "Communication Address", so say so up front rather
+        // than after it has been sent.
+        const missing = [
+          ["seller_company", "company name"],
+          ["seller_address", "communication address"],
+          ["email", "email"],
+        ].filter(([k]) => !String(s?.[k as string] || "").trim()).map(([, label]) => label as string);
+        setSellerGaps(missing);
         if (!s) return;
         setBank({
           name: s.bank_name || "",
@@ -440,14 +452,16 @@ export default function NewInvoice() {
           </p>
         </div>
         <div>
-          <label className={labelCls}>Subject (Sub:)</label>
+          <label className={labelCls}>Subject (title)</label>
           <input
             className={inputCls}
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder="Supply of LBI route survey for 120 MT transformer"
+            placeholder="Route survey report"
           />
-          <p className="text-xs text-gray-500 mt-1">Printed as a “Sub :” line above the item table.</p>
+          <p className="text-xs text-gray-500 mt-1">
+            Printed in bold as the title above the description of the first line item.
+          </p>
         </div>
       </div>
     </section>
@@ -597,6 +611,18 @@ export default function NewInvoice() {
             Edit seller / bank / logo settings →
           </a>
         </div>
+
+        {sellerGaps.length > 0 && (
+          <div className="mb-6 rounded-lg border border-amber-800/60 bg-amber-950/40 p-4 text-sm text-amber-200">
+            Your {sellerGaps.join(", ")} {sellerGaps.length > 1 ? "are" : "is"} not set, so the
+            &ldquo;Communication Address&rdquo; block on the invoice will print incomplete. Add{" "}
+            {sellerGaps.length > 1 ? "them" : "it"} under{" "}
+            <a href="/portal/invoices/settings" className="underline hover:text-amber-100">
+              invoice settings
+            </a>
+            .
+          </div>
+        )}
 
         <div className="space-y-6">
           {mode === "manual" && InvoiceMetaCard}
