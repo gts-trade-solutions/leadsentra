@@ -61,10 +61,11 @@ export default function NewInvoice() {
   const [customer, setCustomer] = useState({ ...emptyCustomer });
 
   // Saved bill-to addresses: the customer typed once on an earlier invoice,
-  // picked here by email (or name / phone / city) to fill the block below.
+  // picked by email (or name / phone / city) to fill the block below. They
+  // share the one "Search contacts" box rather than owning a second search
+  // field — two boxes filling the same fields only raises the question of
+  // which one to use.
   const [billTo, setBillTo] = useState<BillToAddress[]>([]);
-  const [billToQuery, setBillToQuery] = useState("");
-  const [billToOpen, setBillToOpen] = useState(false);
   const [selectedBillTo, setSelectedBillTo] = useState("");
   /** undefined = modal closed, null = adding, a row = editing that row. */
   const [billToModal, setBillToModal] = useState<BillToAddress | null | undefined>(undefined);
@@ -201,11 +202,9 @@ export default function NewInvoice() {
       setSelectedContact(c.id);
       setContactQuery(contactLabel(c));
       setContactOpen(false);
-      // Both pickers fill the same fields, so a contact pick supersedes any
-      // saved address — leaving it "selected" would misreport where these
-      // details came from.
+      // A contact pick supersedes any saved address — leaving it "selected"
+      // would misreport where these details came from.
       setSelectedBillTo("");
-      setBillToQuery("");
       setCustomer({
         ...emptyCustomer,
         contact_id: c.id,
@@ -220,8 +219,10 @@ export default function NewInvoice() {
     [contactLabel]
   );
 
+  /** Drop the selection but leave whatever is typed in the fields alone. */
   function clearContact() {
     setSelectedContact("");
+    setSelectedBillTo("");
     setContactQuery("");
     setContactOpen(false);
     setCustomer((c) => ({ ...c, contact_id: "", company_id: "" }));
@@ -230,21 +231,12 @@ export default function NewInvoice() {
   /** Fill the customer block from a saved address — the point of the whole book. */
   const applyBillTo = useCallback((a: BillToAddress) => {
     setSelectedBillTo(a.id);
-    setBillToQuery([a.label, a.city].filter(Boolean).join(" — "));
-    setBillToOpen(false);
+    setContactQuery([a.label, a.city].filter(Boolean).join(" — "));
+    setContactOpen(false);
     setCustomer({ ...emptyCustomer, ...billToCustomerFields(a) });
-    // Keep the contact box honest: it only claims a contact when the saved
-    // address actually links to one.
+    // The box only claims a CRM contact when the saved address links to one.
     setSelectedContact(a.contact_id || "");
-    setContactQuery(a.contact_id ? [a.name, a.company, a.email].filter(Boolean).join(" · ") : "");
   }, []);
-
-  /** Drop the selection but leave the typed-in details alone. */
-  function clearBillTo() {
-    setSelectedBillTo("");
-    setBillToQuery("");
-    setBillToOpen(false);
-  }
 
   function onBillToSaved(saved: BillToAddress) {
     setBillTo((prev) => [saved, ...prev.filter((r) => r.id !== saved.id)]);
@@ -252,12 +244,14 @@ export default function NewInvoice() {
     setBillToModal(undefined);
   }
 
-  // Once an address is picked, the box holds its label rather than a search
-  // term — filtering on that would leave the list empty, so show the whole
-  // book until the user types again (which drops the selection).
+  /** True once something is picked: the box then holds a label, not a query. */
+  const hasPick = !!(selectedBillTo || selectedContact);
+
+  // Filtering on that label would empty the list, so show everything until the
+  // user types again (which drops the selection).
   const filteredBillTo = useMemo(
-    () => (selectedBillTo ? billTo : billTo.filter((a) => billToMatches(a, billToQuery))).slice(0, 50),
-    [billTo, billToQuery, selectedBillTo]
+    () => (hasPick ? billTo : billTo.filter((a) => billToMatches(a, contactQuery))).slice(0, 50),
+    [billTo, contactQuery, hasPick]
   );
 
   const selectedBillToRow = useMemo(
@@ -272,14 +266,14 @@ export default function NewInvoice() {
 
   // Filter contacts by the typed query (name / company / email), cap results.
   const filteredContacts = useMemo(() => {
-    const q = contactQuery.trim().toLowerCase();
+    const q = hasPick ? "" : contactQuery.trim().toLowerCase();
     const base = !q
       ? contacts
       : contacts.filter((c) =>
           [c.name, c.company, c.email].some((f) => (f || "").toLowerCase().includes(q))
         );
     return base.slice(0, 50);
-  }, [contacts, contactQuery]);
+  }, [contacts, contactQuery, hasPick]);
 
   // Only the selected tax is charged; the other leg is always zero.
   const effectiveGst = taxKind === "gst" ? num(taxRate, 0) : 0;
@@ -694,23 +688,18 @@ export default function NewInvoice() {
     </section>
   );
 
-  // Saved bill-to addresses (both modes). A customer invoiced once is already
-  // in this list — picking them by email fills in every field below, so the
-  // details are never re-typed (or mistyped) on the second invoice.
-  const BillToCard = (
+  // Shared customer block (both modes). The one search box covers both saved
+  // bill-to addresses (a customer invoiced before — picking them fills in
+  // every field, address included) and CRM contacts.
+  const CustomerCard = (
     <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-sm font-semibold text-white">Bill to address (prefill)</h2>
-          <p className="text-xs text-gray-500 mt-1">
-            Search a saved customer by email, name, phone or city — the customer details and billing address below
-            fill themselves in.
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <h2 className="text-sm font-semibold text-white">Customer</h2>
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setBillToModal(null)}
+            title="Save a new bill-to address and use it on this invoice"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm"
           >
             <Plus className="w-4 h-4" /> Quick add
@@ -719,143 +708,123 @@ export default function NewInvoice() {
             href="/portal/invoices/bill-to"
             target="_blank"
             rel="noreferrer"
-            title="Opens in a new tab so this invoice isn't lost"
+            title="Saved bill-to addresses — opens in a new tab so this invoice isn't lost"
             className="px-3 py-1.5 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm"
           >
             Manage
           </a>
         </div>
       </div>
-
-      <div className="relative">
-        <input
-          className={inputCls}
-          value={billToQuery}
-          placeholder="Search saved address…"
-          onChange={(e) => {
-            setBillToQuery(e.target.value);
-            setBillToOpen(true);
-            if (selectedBillTo) setSelectedBillTo("");
-          }}
-          onFocus={() => setBillToOpen(true)}
-          onBlur={() => setTimeout(() => setBillToOpen(false), 150)}
-        />
-        {billToOpen && (
-          <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
-            {selectedBillTo && (
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={clearBillTo}
-                className="w-full text-left px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 border-b border-gray-700"
-              >
-                (Clear selection)
-              </button>
-            )}
-            {filteredBillTo.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-gray-500">
-                {billTo.length === 0
-                  ? "No saved addresses yet — use Quick add, or just fill the customer in below and it will be saved for next time."
-                  : "No saved address matches"}
-              </div>
-            ) : (
-              filteredBillTo.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  // preventDefault keeps input focus so onBlur doesn't beat the click
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => applyBillTo(a)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-700"
-                >
-                  <div className="text-sm text-gray-200 font-medium">
-                    {a.label}
-                    {a.city ? <span className="text-gray-400 font-normal"> — {a.city}</span> : null}
-                  </div>
-                  <div className="text-xs text-gray-500">{billToSummary(a)}</div>
-                </button>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-
-      {selectedBillToRow ? (
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <span className="text-xs text-gray-500">
-            Filled from <span className="text-gray-300">{selectedBillToRow.label}</span>. Edits below apply to this
-            invoice only.
-          </span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => setBillToModal(selectedBillToRow)}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-emerald-400"
-            >
-              <Pencil className="w-3 h-3" /> Edit saved address
-            </button>
-            <button type="button" onClick={clearBillTo} className="text-xs text-gray-400 hover:text-emerald-400">
-              Clear selection
-            </button>
-          </div>
-        </div>
-      ) : (
-        <p className="mt-2 text-xs text-gray-500">
-          Nothing saved yet for this customer? Fill the details in below — they are added to the address book when
-          the invoice is saved.
-        </p>
-      )}
-    </section>
-  );
-
-  // Shared customer block (both modes).
-  const CustomerCard = (
-    <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
-      <h2 className="text-sm font-semibold text-white mb-4">Customer</h2>
       <div className="mb-4 relative">
-        <label className={labelCls}>Search contacts</label>
+        <label className={labelCls}>Search saved addresses &amp; contacts</label>
         <input
           className={inputCls}
           value={contactQuery}
-          placeholder="Type a name, company, or email…"
+          placeholder="Type an email, name, company, phone or city…"
           onChange={(e) => {
             setContactQuery(e.target.value);
             setContactOpen(true);
             if (selectedContact) setSelectedContact("");
+            if (selectedBillTo) setSelectedBillTo("");
           }}
           onFocus={() => setContactOpen(true)}
           onBlur={() => setTimeout(() => setContactOpen(false), 150)}
         />
         {contactOpen && (
-          <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
-            {filteredContacts.length === 0 ? (
+          <div className="absolute z-20 mt-1 w-full max-h-72 overflow-auto rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
+            {hasPick && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={clearContact}
+                className="w-full text-left px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 border-b border-gray-700"
+              >
+                (Clear selection)
+              </button>
+            )}
+
+            {/* Saved addresses first: they carry the billing address and GSTIN,
+                so they need one click where a contact still needs typing. */}
+            {filteredBillTo.length > 0 && (
+              <>
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-700">
+                  Saved addresses
+                </div>
+                {filteredBillTo.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    // preventDefault keeps input focus so onBlur doesn't beat the click
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyBillTo(a)}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-700"
+                  >
+                    <div className="text-sm text-gray-200 font-medium">
+                      {a.label}
+                      {a.city ? <span className="text-gray-400 font-normal"> — {a.city}</span> : null}
+                    </div>
+                    <div className="text-xs text-gray-500">{billToSummary(a)}</div>
+                  </button>
+                ))}
+              </>
+            )}
+
+            {filteredContacts.length > 0 && (
+              <>
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500 border-y border-gray-700">
+                  Contacts
+                </div>
+                {filteredContacts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onPickContact(c)}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-700"
+                  >
+                    <div className="text-sm text-gray-200 font-medium">{c.name || c.company || "(no name)"}</div>
+                    <div className="text-xs text-gray-500">{[c.company, c.email].filter(Boolean).join(" · ")}</div>
+                  </button>
+                ))}
+              </>
+            )}
+
+            {filteredBillTo.length === 0 && filteredContacts.length === 0 && (
               <div className="px-3 py-2 text-sm text-gray-500">
-                {contacts.length === 0 ? "No contacts yet — fill the fields below manually." : "No matching contacts"}
+                {billTo.length === 0 && contacts.length === 0
+                  ? "Nothing saved yet — fill the fields below and this customer is saved for next time."
+                  : "No saved address or contact matches"}
               </div>
-            ) : (
-              filteredContacts.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  // preventDefault keeps input focus so onBlur doesn't beat the click
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => onPickContact(c)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-700"
-                >
-                  <div className="text-sm text-gray-200 font-medium">{c.name || c.company || "(no name)"}</div>
-                  <div className="text-xs text-gray-500">{[c.company, c.email].filter(Boolean).join(" · ")}</div>
-                </button>
-              ))
             )}
           </div>
         )}
-        <div className="mt-1 flex items-center justify-between">
-          <span className="text-xs text-gray-500">Or just type the customer details below.</span>
-          {selectedContact && (
-            <button type="button" onClick={clearContact} className="text-xs text-gray-400 hover:text-emerald-400">
-              Clear selection
-            </button>
-          )}
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <span className="text-xs text-gray-500">
+            {selectedBillToRow ? (
+              <>
+                Filled from <span className="text-gray-300">{selectedBillToRow.label}</span>. Edits below apply to
+                this invoice only.
+              </>
+            ) : (
+              "Or just type the details below — this customer is saved to the address book when the invoice is saved."
+            )}
+          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            {selectedBillToRow && (
+              <button
+                type="button"
+                onClick={() => setBillToModal(selectedBillToRow)}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-emerald-400"
+              >
+                <Pencil className="w-3 h-3" /> Edit saved address
+              </button>
+            )}
+            {hasPick && (
+              <button type="button" onClick={clearContact} className="text-xs text-gray-400 hover:text-emerald-400">
+                Clear selection
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -948,7 +917,6 @@ export default function NewInvoice() {
         <div className="space-y-6">
           {mode === "manual" && InvoiceMetaCard}
           {mode === "manual" && SellerCard}
-          {BillToCard}
           {CustomerCard}
 
           {mode === "manual" ? (
