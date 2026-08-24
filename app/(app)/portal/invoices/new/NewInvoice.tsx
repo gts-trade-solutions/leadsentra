@@ -5,11 +5,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import PhoneInput from "@/components/PhoneInput";
 import * as XLSX from "xlsx";
-import { ArrowLeft, Plus, Trash2, Save, Send, Upload, FileSpreadsheet, FileText, Eye } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Save, Send, Upload, FileSpreadsheet, FileText, Eye, Pencil } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
+import BillToAddressModal from "@/components/BillToAddressModal";
 import { toast } from "@/hooks/use-toast";
 import { computeTotals, normalizeItems, formatMoney, num } from "@/lib/invoices";
+import {
+  billToCustomerFields,
+  billToMatches,
+  billToSummary,
+  type BillToAddress,
+} from "@/lib/billTo";
 
 type ContactOpt = {
   id: string;
@@ -52,6 +59,15 @@ export default function NewInvoice() {
   const [contactQuery, setContactQuery] = useState("");
   const [contactOpen, setContactOpen] = useState(false);
   const [customer, setCustomer] = useState({ ...emptyCustomer });
+
+  // Saved bill-to addresses: the customer typed once on an earlier invoice,
+  // picked here by email (or name / phone / city) to fill the block below.
+  const [billTo, setBillTo] = useState<BillToAddress[]>([]);
+  const [billToQuery, setBillToQuery] = useState("");
+  const [billToOpen, setBillToOpen] = useState(false);
+  const [selectedBillTo, setSelectedBillTo] = useState("");
+  /** undefined = modal closed, null = adding, a row = editing that row. */
+  const [billToModal, setBillToModal] = useState<BillToAddress | null | undefined>(undefined);
 
   // Manual-only state
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -114,6 +130,29 @@ export default function NewInvoice() {
     })();
   }, []);
 
+  const loadBillTo = useCallback(async () => {
+    try {
+      const res = await fetch("/api/invoices/bill-to", { cache: "no-store", credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      setBillTo(Array.isArray(json?.data) ? json.data : []);
+    } catch {
+      setBillTo([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBillTo();
+  }, [loadBillTo]);
+
+  // Manage opens in its own tab so a half-built invoice isn't thrown away to
+  // fix an address. Re-reading the book when this tab is focused again is what
+  // makes an edit made over there show up in the picker here.
+  useEffect(() => {
+    const onFocus = () => loadBillTo();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [loadBillTo]);
+
   // Pre-fill the bank block from the saved invoice settings; it stays editable
   // so a one-off invoice can be issued against a different account.
   useEffect(() => {
@@ -162,6 +201,11 @@ export default function NewInvoice() {
       setSelectedContact(c.id);
       setContactQuery(contactLabel(c));
       setContactOpen(false);
+      // Both pickers fill the same fields, so a contact pick supersedes any
+      // saved address — leaving it "selected" would misreport where these
+      // details came from.
+      setSelectedBillTo("");
+      setBillToQuery("");
       setCustomer({
         ...emptyCustomer,
         contact_id: c.id,
@@ -182,6 +226,49 @@ export default function NewInvoice() {
     setContactOpen(false);
     setCustomer((c) => ({ ...c, contact_id: "", company_id: "" }));
   }
+
+  /** Fill the customer block from a saved address — the point of the whole book. */
+  const applyBillTo = useCallback((a: BillToAddress) => {
+    setSelectedBillTo(a.id);
+    setBillToQuery([a.label, a.city].filter(Boolean).join(" — "));
+    setBillToOpen(false);
+    setCustomer({ ...emptyCustomer, ...billToCustomerFields(a) });
+    // Keep the contact box honest: it only claims a contact when the saved
+    // address actually links to one.
+    setSelectedContact(a.contact_id || "");
+    setContactQuery(a.contact_id ? [a.name, a.company, a.email].filter(Boolean).join(" · ") : "");
+  }, []);
+
+  /** Drop the selection but leave the typed-in details alone. */
+  function clearBillTo() {
+    setSelectedBillTo("");
+    setBillToQuery("");
+    setBillToOpen(false);
+  }
+
+  function onBillToSaved(saved: BillToAddress) {
+    setBillTo((prev) => [saved, ...prev.filter((r) => r.id !== saved.id)]);
+    applyBillTo(saved);
+    setBillToModal(undefined);
+  }
+
+  // Once an address is picked, the box holds its label rather than a search
+  // term — filtering on that would leave the list empty, so show the whole
+  // book until the user types again (which drops the selection).
+  const filteredBillTo = useMemo(
+    () => (selectedBillTo ? billTo : billTo.filter((a) => billToMatches(a, billToQuery))).slice(0, 50),
+    [billTo, billToQuery, selectedBillTo]
+  );
+
+  const selectedBillToRow = useMemo(
+    () => billTo.find((a) => a.id === selectedBillTo) || null,
+    [billTo, selectedBillTo]
+  );
+
+  const billToCategories = useMemo(
+    () => Array.from(new Set(billTo.map((a) => (a.category || "").trim()).filter(Boolean))).sort(),
+    [billTo]
+  );
 
   // Filter contacts by the typed query (name / company / email), cap results.
   const filteredContacts = useMemo(() => {
@@ -275,6 +362,9 @@ export default function NewInvoice() {
       customer_gstin: customer.gstin || null,
       customer_pan: customer.pan || null,
       customer_address: customer.address || null,
+      // Which saved address this was billed to, so the book records the use
+      // instead of capturing a near-duplicate of a row it already holds.
+      bill_to_id: selectedBillTo || null,
       extra_recipients: extraRecipients || null,
       seller_company: seller.company || null,
       seller_address: seller.address || null,
@@ -347,6 +437,7 @@ export default function NewInvoice() {
     fd.append("customer_gstin", customer.gstin || "");
     fd.append("customer_pan", customer.pan || "");
     fd.append("customer_address", customer.address || "");
+    fd.append("bill_to_id", selectedBillTo || "");
     fd.append("extra_recipients", extraRecipients || "");
     fd.append("currency", currency);
     fd.append("issue_date", issueDate);
@@ -603,6 +694,120 @@ export default function NewInvoice() {
     </section>
   );
 
+  // Saved bill-to addresses (both modes). A customer invoiced once is already
+  // in this list — picking them by email fills in every field below, so the
+  // details are never re-typed (or mistyped) on the second invoice.
+  const BillToCard = (
+    <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Bill to address (prefill)</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Search a saved customer by email, name, phone or city — the customer details and billing address below
+            fill themselves in.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setBillToModal(null)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm"
+          >
+            <Plus className="w-4 h-4" /> Quick add
+          </button>
+          <a
+            href="/portal/invoices/bill-to"
+            target="_blank"
+            rel="noreferrer"
+            title="Opens in a new tab so this invoice isn't lost"
+            className="px-3 py-1.5 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm"
+          >
+            Manage
+          </a>
+        </div>
+      </div>
+
+      <div className="relative">
+        <input
+          className={inputCls}
+          value={billToQuery}
+          placeholder="Search saved address…"
+          onChange={(e) => {
+            setBillToQuery(e.target.value);
+            setBillToOpen(true);
+            if (selectedBillTo) setSelectedBillTo("");
+          }}
+          onFocus={() => setBillToOpen(true)}
+          onBlur={() => setTimeout(() => setBillToOpen(false), 150)}
+        />
+        {billToOpen && (
+          <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
+            {selectedBillTo && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={clearBillTo}
+                className="w-full text-left px-3 py-2 text-sm text-gray-400 hover:bg-gray-700 border-b border-gray-700"
+              >
+                (Clear selection)
+              </button>
+            )}
+            {filteredBillTo.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-gray-500">
+                {billTo.length === 0
+                  ? "No saved addresses yet — use Quick add, or just fill the customer in below and it will be saved for next time."
+                  : "No saved address matches"}
+              </div>
+            ) : (
+              filteredBillTo.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  // preventDefault keeps input focus so onBlur doesn't beat the click
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => applyBillTo(a)}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-700"
+                >
+                  <div className="text-sm text-gray-200 font-medium">
+                    {a.label}
+                    {a.city ? <span className="text-gray-400 font-normal"> — {a.city}</span> : null}
+                  </div>
+                  <div className="text-xs text-gray-500">{billToSummary(a)}</div>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {selectedBillToRow ? (
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <span className="text-xs text-gray-500">
+            Filled from <span className="text-gray-300">{selectedBillToRow.label}</span>. Edits below apply to this
+            invoice only.
+          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => setBillToModal(selectedBillToRow)}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-emerald-400"
+            >
+              <Pencil className="w-3 h-3" /> Edit saved address
+            </button>
+            <button type="button" onClick={clearBillTo} className="text-xs text-gray-400 hover:text-emerald-400">
+              Clear selection
+            </button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-gray-500">
+          Nothing saved yet for this customer? Fill the details in below — they are added to the address book when
+          the invoice is saved.
+        </p>
+      )}
+    </section>
+  );
+
   // Shared customer block (both modes).
   const CustomerCard = (
     <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
@@ -743,6 +948,7 @@ export default function NewInvoice() {
         <div className="space-y-6">
           {mode === "manual" && InvoiceMetaCard}
           {mode === "manual" && SellerCard}
+          {BillToCard}
           {CustomerCard}
 
           {mode === "manual" ? (
@@ -988,6 +1194,15 @@ export default function NewInvoice() {
             </button>
           </div>
         </div>
+
+        {billToModal !== undefined && (
+          <BillToAddressModal
+            initial={billToModal}
+            categories={billToCategories}
+            onClose={() => setBillToModal(undefined)}
+            onSaved={onBillToSaved}
+          />
+        )}
       </div>
     </AuthGuard>
   );

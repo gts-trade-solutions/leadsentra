@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { nextInvoiceNumber, num, parseRecipients, MAX_INVOICE_RECIPIENTS } from "@/lib/invoices";
 import { saveInvoiceFile } from "@/lib/invoiceUpload";
+import { recordInvoiceBillTo } from "@/lib/billToRepo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -99,6 +100,22 @@ export async function POST(req: Request) {
     );
 
     await conn.commit();
+
+    // Same as the generated path: the customer this PDF was billed to goes
+    // into the address book (or the address it was picked from is marked as
+    // used), after the invoice itself is safe.
+    await recordInvoiceBillTo(session.id, f(form, "bill_to_id", 36), {
+      name: customerName,
+      company: customerCompany,
+      email: customerEmail,
+      phone: f(form, "customer_phone", 64),
+      gstin: f(form, "customer_gstin", 32),
+      pan: f(form, "customer_pan", 32),
+      address: f(form, "customer_address", 2000),
+      contact_id: f(form, "customer_contact_id", 36),
+      company_id: f(form, "customer_company_id", 36),
+    });
+
     return NextResponse.json({ id, invoice_number: invoiceNumber }, { status: 201 });
   } catch (e: any) {
     await conn.rollback();

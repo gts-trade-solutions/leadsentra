@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Plus, Send, Download, Trash2, Eye, Settings, Upload, ClipboardCheck } from "lucide-react";
+import { FileText, Plus, Send, Download, Trash2, Eye, Settings, Upload, ClipboardCheck, BookUser } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import EmptyState from "@/components/EmptyState";
@@ -145,6 +145,13 @@ export default function InvoicesPage() {
           title="Proforma Invoices"
           description="Create, preview, and email proforma invoices to your customers."
         >
+          <button
+            onClick={() => router.push("/portal/invoices/bill-to")}
+            className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm font-medium transition-colors"
+            title="Saved bill-to addresses used to prefill a new invoice"
+          >
+            <BookUser className="w-4 h-4" /> Bill-to addresses
+          </button>
           <button
             onClick={() => router.push("/portal/invoices/settings")}
             className="flex items-center gap-2 px-3 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm font-medium transition-colors"

@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
+import { recordInvoiceBillTo } from "./billToRepo";
 import {
   normalizeItems,
   computeTotals,
@@ -183,6 +184,12 @@ export async function createProformaInvoice(
     }
 
     await conn.commit();
+
+    // Only now that the invoice is committed: remember this customer so the
+    // next invoice for them needs nothing but their email picked. Silent by
+    // design — the address book must never turn a saved invoice into an error.
+    await recordInvoiceBillTo(userId, s(body.bill_to_id, 36), customer);
+
     return { id, invoice_number: invoiceNumber };
   } catch (e: any) {
     await conn.rollback();
