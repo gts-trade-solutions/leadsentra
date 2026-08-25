@@ -133,12 +133,16 @@ export async function GET(req: NextRequest) {
     where = `WHERE ${clauses.join(" OR ")}`;
   }
 
+  // company_type is read through COALESCE: the importer fills `industry` and
+  // `company_type` alike, the Add Company form fills only `industry`, and older
+  // rows can carry only `company_type`. Reading one column alone hid the other's
+  // rows from every filter dropdown built off this list.
   const [rows] = await db.query(
     `SELECT
         c.company_id,
         c.user_id,
         c.company_name,
-        c.industry AS company_type,
+        COALESCE(c.industry, c.company_type) AS company_type,
         c.segment,
         c.size,
         c.country,

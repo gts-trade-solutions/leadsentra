@@ -668,6 +668,10 @@ export default function CompaniesPage() {
             ...r,
             country,
             location: country, // keep existing filter compat (location filter == country)
+            // Row.companyType is camelCase but the API sends company_type, so
+            // this was undefined on every row — which is why the Company Type
+            // dropdown had nothing to offer.
+            companyType: r?.company_type ?? r?.industry ?? "",
           };
         });
         setAllRows(pruned as Row[]);
