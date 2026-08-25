@@ -71,6 +71,7 @@ export async function companyInboxesByFilter(opts: {
   approvedCompanyIds?: string[];
   segments?: string[];
   countries?: string[];
+  companyTypes?: string[];
   companyIds?: string[];
   q?: string;
 }): Promise<string[]> {
@@ -96,6 +97,9 @@ export async function companyInboxesByFilter(opts: {
   pushInClause(where, params, "company_id", opts.companyIds ?? []);
   pushInClause(where, params, "segment", opts.segments ?? []);
   pushInClause(where, params, "country", opts.countries ?? []);
+  // The importer writes industry and company_type together; the Add Company
+  // form writes only industry. COALESCE reads a company's type either way.
+  pushInClause(where, params, "COALESCE(industry, company_type)", opts.companyTypes ?? []);
 
   // The picker's search box. Matched against the company name and the
   // addresses themselves — searching for "@acme.com" is how you find the

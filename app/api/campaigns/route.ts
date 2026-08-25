@@ -44,7 +44,8 @@ export async function GET() {
  *       q?: string,             // when mode === 'filtered', server applies it
  *       contact_ids?: string[], // when mode === 'selected'
  *       emails?: string[],      // when mode === 'uploaded' (one-off list)
- *       segments?: string[], countries?: string[], company_ids?: string[]
+ *       segments?: string[], countries?: string[], company_ids?: string[],
+ *       company_types?: string[]
  *     }
  *   }
  *
@@ -92,6 +93,7 @@ export async function POST(req: Request) {
   // with the legacy singular keys still honored for older callers.
   const filterSegments  = multiFilter(audience.segments,  audience.segment);
   const filterCountries = multiFilter(audience.countries, audience.country);
+  const filterCompanyTypes = multiFilter(audience.company_types, audience.company_type);
   // Department targeting (e.g. "LBI") — narrows to contacts whose `department`
   // column matches. Used by the Catalogues & Offers send flow.
   const filterDepartment = String(audience.department || "").trim();
@@ -199,6 +201,7 @@ export async function POST(req: Request) {
       approvedCompanyIds: callerIsStaff ? [] : await getApprovedCompanyIds(session.id),
       segments: filterSegments,
       countries: filterCountries,
+      companyTypes: filterCompanyTypes,
       companyIds: filterCompanyIds,
       q: search,
     });
@@ -236,11 +239,14 @@ export async function POST(req: Request) {
     pushInClause(where, params, "c.company_id", filterCompanyIds);
     pushInClause(where, params, "co.segment", filterSegments);
     pushInClause(where, params, "co.country", filterCountries);
+    // industry and company_type are written together by the importer but the
+    // Add Company form fills only industry — COALESCE matches either.
+    pushInClause(where, params, "COALESCE(co.industry, co.company_type)", filterCompanyTypes);
     if (filterDepartment) { where.push("c.department = ?"); params.push(filterDepartment); }
 
     const fromParts: string[] = ["contacts c"];
     if (!callerIsStaff) fromParts.push("JOIN unlocked_contacts_v u ON u.contact_id = c.id");
-    if (filterSegments.length || filterCountries.length) {
+    if (filterSegments.length || filterCountries.length || filterCompanyTypes.length) {
       fromParts.push("LEFT JOIN companies co ON co.company_id = c.company_id");
     }
     const [rows] = await db.query(

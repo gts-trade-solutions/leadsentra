@@ -45,6 +45,7 @@ export async function POST(req: Request) {
   // POST /api/campaigns exactly or the preview count lies.
   const filterSegments   = multiFilter(audience?.segments,  audience?.segment);
   const filterCountries  = multiFilter(audience?.countries, audience?.country);
+  const filterCompanyTypes = multiFilter(audience?.company_types, audience?.company_type);
   const filterDepartment = String(audience?.department || "").trim();
   // Catalogue/offer sends restrict to 'lead' contacts; regular sends don't.
   const leadsOnly = audience?.leads_only === true;
@@ -87,6 +88,7 @@ export async function POST(req: Request) {
       approvedCompanyIds: callerIsStaff ? [] : await getApprovedCompanyIds(session.id),
       segments: filterSegments,
       countries: filterCountries,
+      companyTypes: filterCompanyTypes,
       companyIds: filterCompanyIds,
       q: search,
     });
@@ -109,11 +111,12 @@ export async function POST(req: Request) {
     pushInClause(where, params, "c.company_id", filterCompanyIds);
     pushInClause(where, params, "co.segment", filterSegments);
     pushInClause(where, params, "co.country", filterCountries);
+    pushInClause(where, params, "COALESCE(co.industry, co.company_type)", filterCompanyTypes);
     if (filterDepartment) { where.push("c.department = ?"); params.push(filterDepartment); }
 
     const fromParts: string[] = ["contacts c"];
     if (!callerIsStaff) fromParts.push("JOIN unlocked_contacts_v u ON u.contact_id = c.id");
-    if (filterSegments.length || filterCountries.length) {
+    if (filterSegments.length || filterCountries.length || filterCompanyTypes.length) {
       fromParts.push("LEFT JOIN companies co ON co.company_id = c.company_id");
     }
     const [rows] = await db.query(

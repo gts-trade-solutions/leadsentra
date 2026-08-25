@@ -16,6 +16,7 @@ export const runtime = "nodejs";
  *   offset     pagination offset
  *   count      "only" — return ONLY the total count, no rows
  *   segment    company `segment` — repeatable, or comma-separated (OR'd)
+ *   company_type company type — repeatable, or comma-separated (OR'd)
  *   country    company `country` — repeatable, or comma-separated (OR'd)
  *   company_id company — repeatable, or comma-separated (OR'd)
  *
@@ -42,6 +43,7 @@ export async function GET(req: Request) {
       .map((v) => v.trim())
       .filter(Boolean);
   const segments   = multiParam("segment");
+  const companyTypes = multiParam("company_type");
   const countries  = multiParam("country");
   const companyIds = multiParam("company_id");
   const limit      = Math.min(Math.max(Number(url.searchParams.get("limit") || 50), 1), 500);
@@ -52,7 +54,7 @@ export async function GET(req: Request) {
   const leadsOnly  = url.searchParams.get("leads_only") === "1";
 
   const staffBypass = isStaff(session.role);
-  const needsCompaniesJoin = !!(segments.length || countries.length);
+  const needsCompaniesJoin = !!(segments.length || countries.length || companyTypes.length);
 
   // ---------- WHERE ----------
   const where: string[] = ["c.email IS NOT NULL", "c.email <> ''"];
@@ -71,6 +73,9 @@ export async function GET(req: Request) {
   pushInClause(where, params, "c.company_id", companyIds);
   pushInClause(where, params, "co.segment", segments);
   pushInClause(where, params, "co.country", countries);
+  // The importer fills industry and company_type alike; the Add Company form
+  // fills only industry. COALESCE is what matches a company however it arrived.
+  pushInClause(where, params, "COALESCE(co.industry, co.company_type)", companyTypes);
   if (department) {
     where.push("c.department = ?");
     params.push(department);

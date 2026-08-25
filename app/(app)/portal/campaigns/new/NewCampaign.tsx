@@ -192,6 +192,7 @@ export default function NewCampaign() {
   // / company).  Combine with `mode: "filtered"` to narrow the send audience.
   const [filterSegments, setFilterSegments] = useState<string[]>([]);
   const [filterCountries, setFilterCountries] = useState<string[]>([]);
+  const [filterCompanyTypes, setFilterCompanyTypes] = useState<string[]>([]);
   const [filterCompanyIds, setFilterCompanyIds] = useState<string[]>([]);
   // Department targeting — set by the Catalogues & Offers "Send" hand-off
   // (e.g. Race Innovations › LBI). Applied to 'all' and 'filtered' modes.
@@ -206,6 +207,7 @@ export default function NewCampaign() {
   const [includeCompanyEmails, setIncludeCompanyEmails] = useState(false);
   const [segmentOptions, setSegmentOptions] = useState<string[]>([]);
   const [countryOptions, setCountryOptions] = useState<string[]>([]);
+  const [companyTypeOptions, setCompanyTypeOptions] = useState<string[]>([]);
   const [companyOptions, setCompanyOptions] = useState<{ company_id: string; name: string }[]>([]);
   // Company is filtered by id but displayed by name, so the picker takes
   // {value,label} pairs rather than plain strings.
@@ -314,12 +316,14 @@ export default function NewCampaign() {
   // and newly added rows didn't appear in the dropdowns.
   const refreshFilterOptions = useCallback(async () => {
     try {
-      const [segResp, compResp] = await Promise.all([
+      const [segResp, compResp, vocabResp] = await Promise.all([
         fetch("/api/companies/segments", { credentials: "same-origin", cache: "no-store" }),
         fetch("/api/companies", { credentials: "same-origin", cache: "no-store" }),
+        fetch("/api/companies/vocab", { credentials: "same-origin", cache: "no-store" }),
       ]);
       const segJson = await segResp.json().catch(() => ({}));
       const compJson = await compResp.json().catch(() => ({}));
+      const vocabJson = await vocabResp.json().catch(() => ({}));
       setSegmentOptions(Array.isArray(segJson?.segments) ? segJson.segments : []);
       const companies = Array.isArray(compJson?.data) ? compJson.data : [];
       setCompanyOptions(
@@ -335,6 +339,26 @@ export default function NewCampaign() {
         )
       ).sort((a, b) => a.localeCompare(b));
       setCountryOptions(countries);
+
+      // Company type, the way the Companies page builds the same dropdown:
+      // the values actually stored, narrowed to the approved vocabulary. An
+      // empty vocabulary (fresh install, or the migration hasn't run) means
+      // every stored value is offered rather than an empty dropdown.
+      const approved: string[] = Array.isArray(vocabJson?.terms?.company_type)
+        ? vocabJson.terms.company_type
+        : [];
+      const approvedKeys = new Set(approved.map((t) => t.toLowerCase()));
+      const stored = Array.from(
+        new Set<string>(
+          companies
+            .map((c: any) => String(c.company_type || c.industry || "").trim())
+            .filter(Boolean)
+        )
+      );
+      setCompanyTypeOptions(
+        (approvedKeys.size ? stored.filter((t) => approvedKeys.has(t.toLowerCase())) : stored)
+          .sort((a, b) => a.localeCompare(b))
+      );
     } catch {
       /* leave dropdowns empty on failure */
     }
@@ -496,6 +520,7 @@ export default function NewCampaign() {
       // Multi-select: append each filter once per selected value.
       filterSegments.forEach((s) => u.searchParams.append("segment", s));
       filterCountries.forEach((c) => u.searchParams.append("country", c));
+      filterCompanyTypes.forEach((t) => u.searchParams.append("company_type", t));
       filterCompanyIds.forEach((id) => u.searchParams.append("company_id", id));
       const res = await fetch(u.toString(), { credentials: "same-origin", cache: "no-store" });
       const data = await res.json().catch(() => ({}));
@@ -533,6 +558,7 @@ export default function NewCampaign() {
         if (leadsOnly)        url.searchParams.set("leads_only", "1");
         filterSegments.forEach((s) => url.searchParams.append("segment", s));
         filterCountries.forEach((c) => url.searchParams.append("country", c));
+        filterCompanyTypes.forEach((t) => url.searchParams.append("company_type", t));
         filterCompanyIds.forEach((id) => url.searchParams.append("company_id", id));
         const res = await fetch(url.toString(), { credentials: "same-origin", cache: "no-store" });
         const data = await res.json().catch(() => ({}));
@@ -548,7 +574,7 @@ export default function NewCampaign() {
         setRecLoading(false);
       }
     },
-    [filterSegments, filterCountries, filterCompanyIds, filterDepartment, leadsOnly]
+    [filterSegments, filterCountries, filterCompanyTypes, filterCompanyIds, filterDepartment, leadsOnly]
   );
 
   // Reload when search, mode, or any structured filter changes.
@@ -568,7 +594,7 @@ export default function NewCampaign() {
     }, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, recSearch, loadPage, filterSegments, filterCountries, filterCompanyIds, filterDepartment]);
+  }, [mode, recSearch, loadPage, filterSegments, filterCountries, filterCompanyTypes, filterCompanyIds, filterDepartment]);
 
   // Hydrate names/emails for the chips shown in "Selected" mode.
   useEffect(() => {
@@ -631,7 +657,7 @@ export default function NewCampaign() {
     }, 400);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, selectedIds, recSearch, adminMode, allContactsTotal, unlockedTotal, filteredTotal, filterSegments, filterCountries, filterCompanyIds, filterDepartment, uploadedEmails.length, includeCompanyEmails]);
+  }, [mode, selectedIds, recSearch, adminMode, allContactsTotal, unlockedTotal, filteredTotal, filterSegments, filterCountries, filterCompanyTypes, filterCompanyIds, filterDepartment, uploadedEmails.length, includeCompanyEmails]);
 
   // Contact-side count, from the same counters the audience picker uses.
   const contactsToSend = adminMode
@@ -675,6 +701,7 @@ export default function NewCampaign() {
     emails?: string[];
     segments?: string[];
     countries?: string[];
+    company_types?: string[];
     company_ids?: string[];
     department?: string;
     leads_only?: boolean;
@@ -694,6 +721,7 @@ export default function NewCampaign() {
     const filters: Record<string, any> = {};
     if (filterSegments.length)      filters.segments    = filterSegments;
     if (filterCountries.length)     filters.countries   = filterCountries;
+    if (filterCompanyTypes.length)  filters.company_types = filterCompanyTypes;
     if (filterCompanyIds.length)    filters.company_ids = filterCompanyIds;
     if (filterDepartment)           filters.department  = filterDepartment;
 
@@ -1177,7 +1205,16 @@ export default function NewCampaign() {
 
                 {mode === "filtered" && (
                   <div className="mt-4 space-y-3">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                      <MultiSelectFilter
+                        id="camp-type"
+                        label="Company type"
+                        options={companyTypeOptions}
+                        selected={filterCompanyTypes}
+                        onChange={setFilterCompanyTypes}
+                        placeholder="All types"
+                        searchPlaceholder="Search types…"
+                      />
                       <MultiSelectFilter
                         id="camp-segment"
                         label="Segment"
@@ -1208,8 +1245,8 @@ export default function NewCampaign() {
                       <div className="flex items-end gap-2">
                         <button
                           type="button"
-                          onClick={() => { setFilterSegments([]); setFilterCountries([]); setFilterCompanyIds([]); setFilterDepartment(""); setCatalogueTarget(null); }}
-                          disabled={!filterSegments.length && !filterCountries.length && filterCompanyIds.length === 0 && !filterDepartment}
+                          onClick={() => { setFilterSegments([]); setFilterCountries([]); setFilterCompanyTypes([]); setFilterCompanyIds([]); setFilterDepartment(""); setCatalogueTarget(null); }}
+                          disabled={!filterSegments.length && !filterCountries.length && !filterCompanyTypes.length && filterCompanyIds.length === 0 && !filterDepartment}
                           className="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
                         >
                           Clear
@@ -1259,7 +1296,16 @@ export default function NewCampaign() {
 
                 {mode === "company_inboxes" && (
                   <div className="mt-4 space-y-3">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                      <MultiSelectFilter
+                        id="camp-inbox-type"
+                        label="Company type"
+                        options={companyTypeOptions}
+                        selected={filterCompanyTypes}
+                        onChange={setFilterCompanyTypes}
+                        placeholder="All types"
+                        searchPlaceholder="Search types…"
+                      />
                       <MultiSelectFilter
                         id="camp-inbox-segment"
                         label="Segment"
@@ -1290,8 +1336,8 @@ export default function NewCampaign() {
                       <div className="flex items-end gap-2">
                         <button
                           type="button"
-                          onClick={() => { setFilterSegments([]); setFilterCountries([]); setFilterCompanyIds([]); }}
-                          disabled={!filterSegments.length && !filterCountries.length && !filterCompanyIds.length}
+                          onClick={() => { setFilterSegments([]); setFilterCountries([]); setFilterCompanyTypes([]); setFilterCompanyIds([]); }}
+                          disabled={!filterSegments.length && !filterCountries.length && !filterCompanyTypes.length && !filterCompanyIds.length}
                           className="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
                         >
                           Clear
