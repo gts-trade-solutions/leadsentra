@@ -353,11 +353,12 @@ export default function NewCampaign() {
         ? vocabJson.terms.company_type
         : [];
       const approvedKeys = new Set(approved.map((t) => t.toLowerCase()));
+      // The field is companyType: GET /api/companies renames the column on its
+      // way out. Reading company_type found nothing on any row, which is what
+      // left this dropdown empty while 104 real types sat behind it.
       const stored = Array.from(
         new Set<string>(
-          companies
-            .map((c: any) => String(c.company_type || c.industry || "").trim())
-            .filter(Boolean)
+          companies.map((c: any) => String(c.companyType || "").trim()).filter(Boolean)
         )
       );
       const narrowed = stored.filter((t) => approvedKeys.has(t.toLowerCase()));
