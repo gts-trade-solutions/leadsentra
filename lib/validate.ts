@@ -21,6 +21,78 @@ export function isPlaceholder(value: string): boolean {
   return PLACEHOLDER_RE.test(value.trim());
 }
 
+/**
+ * The named HTML entities that turn up inside a scraped address. Deliberately
+ * short: only the ones actually seen in the data, so an unrelated "&name;"
+ * inside an address is left alone rather than guessed at.
+ */
+const EMAIL_ENTITIES: Record<string, string> = {
+  commat: "@",
+  period: ".",
+  amp: "&",
+  hyphen: "-",
+  lowbar: "_",
+  lpar: "(",
+  rpar: ")",
+};
+
+/** A numeric entity's character, or the entity itself if it decodes to nothing. */
+function entityChar(code: number, original: string): string {
+  if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return original;
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return original;
+  }
+}
+
+/**
+ * Undo the encodings a scraped email address arrives wrapped in.
+ *
+ * Websites obfuscate their addresses to defeat scrapers: "info@x.com" is
+ * published as "&#105;&#110;&#102;&#111;&#64;x&#46;com", "info&commat;x.com"
+ * or "%69nfo%40x.com". A scraper that keeps the page's raw text keeps the
+ * obfuscation with it, and what reaches the sheet is not an address at all —
+ * it fails every format check, so it is stored but can never be mailed.
+ *
+ * Also strips the query string off a scraped mailto: link
+ * ("info@x.com?subject=enquiry") and the punctuation a label leaves behind
+ * (": sales@x.com").
+ *
+ * Every step is guarded: anything that does not decode is returned exactly as
+ * it came in, so an address that was already clean is never altered.
+ */
+export function decodeEmail(value?: string | null): string | null {
+  if (value === undefined || value === null) return null;
+  let v = String(value);
+
+  // &#x69; and &#105; and &commat;, in that order — a numeric entity can
+  // decode to '&', and running the named pass last lets that one work too.
+  v = v.replace(/&#x([0-9a-f]+);/gi, (m, hex) => entityChar(parseInt(hex, 16), m));
+  v = v.replace(/&#(\d+);/g, (m, dec) => entityChar(parseInt(dec, 10), m));
+  v = v.replace(/&([a-z]+);/gi, (m, name) => EMAIL_ENTITIES[name.toLowerCase()] ?? m);
+
+  // %40 -> @. decodeURIComponent throws on a lone '%', which is why both the
+  // test and the call are guarded — a stray percent must not lose the address.
+  if (/%[0-9a-f]{2}/i.test(v)) {
+    try {
+      v = decodeURIComponent(v);
+    } catch {
+      /* not valid escaping after all; keep what we had */
+    }
+  }
+
+  // "info@x.com?subject=website enquiry" — the mailto: link's query string,
+  // scraped along with the address it belonged to.
+  const query = v.indexOf("?");
+  if (query > 0) v = v.slice(0, query);
+
+  // Leading/trailing punctuation left by a label (": sales@x.com", "<a@b.com>").
+  v = v.replace(/^[\s:;,.<>()\[\]-]+/, "").replace(/[\s:;,.<>()\[\]-]+$/, "");
+
+  return v.trim();
+}
+
 export type CleanResult = { value: string | null; error?: string };
 
 /**
