@@ -341,9 +341,14 @@ export default function NewCampaign() {
       setCountryOptions(countries);
 
       // Company type, the way the Companies page builds the same dropdown:
-      // the values actually stored, narrowed to the approved vocabulary. An
-      // empty vocabulary (fresh install, or the migration hasn't run) means
-      // every stored value is offered rather than an empty dropdown.
+      // the values actually stored, narrowed to the approved vocabulary so a
+      // typo imported once doesn't become a permanent filter option.
+      //
+      // Narrowed only while something survives it. A vocabulary listing types
+      // nobody is filed under — seeded from a canonical list, or written before
+      // the data it describes — would otherwise empty the dropdown completely
+      // and hide every type there is something to filter by. An unrecognised
+      // value on a thousand companies is not a typo, whatever the list says.
       const approved: string[] = Array.isArray(vocabJson?.terms?.company_type)
         ? vocabJson.terms.company_type
         : [];
@@ -355,9 +360,9 @@ export default function NewCampaign() {
             .filter(Boolean)
         )
       );
+      const narrowed = stored.filter((t) => approvedKeys.has(t.toLowerCase()));
       setCompanyTypeOptions(
-        (approvedKeys.size ? stored.filter((t) => approvedKeys.has(t.toLowerCase())) : stored)
-          .sort((a, b) => a.localeCompare(b))
+        (narrowed.length ? narrowed : stored).sort((a, b) => a.localeCompare(b))
       );
     } catch {
       /* leave dropdowns empty on failure */

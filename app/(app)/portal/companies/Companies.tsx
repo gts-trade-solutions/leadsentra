@@ -777,7 +777,12 @@ export default function CompaniesPage() {
   const onlyApproved = (options: string[], approved: string[]) => {
     if (approved.length === 0) return options;
     const ok = new Set(approved.map((t) => t.toLowerCase()));
-    return options.filter((o) => ok.has(o.toLowerCase()));
+    const kept = options.filter((o) => ok.has(o.toLowerCase()));
+    // An approved list that matches nothing stored describes some other data,
+    // not this. Filtering everything away leaves a dropdown that cannot filter
+    // at all, so fall back to what is really there — the same reasoning as the
+    // empty-list case above, for a list that is merely empty in effect.
+    return kept.length ? kept : options;
   };
 
   const companyTypeOptions = useMemo(() => {
