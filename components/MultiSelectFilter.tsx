@@ -20,6 +20,15 @@ export type MultiSelectOption = { value: string; label: string };
 /** Callers may pass plain strings (value === label) or {value,label} pairs. */
 export type MultiSelectOptionInput = string | MultiSelectOption;
 
+/** Tallest the scrolling list gets when there is room for it. */
+const LIST_MAX = 256;
+/** Shortest it may be squeezed to before the panel flips instead. */
+const LIST_MIN = 120;
+/** The search row and the Clear / Select-all row, which don't scroll. */
+const PANEL_CHROME = 84;
+/** Breathing room against the viewport edge. */
+const EDGE_GAP = 12;
+
 export default function MultiSelectFilter({
   label,
   options,
@@ -39,6 +48,12 @@ export default function MultiSelectFilter({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Where the panel opens, and how tall its list may be. Measured rather than
+  // fixed: this filter sits in a row that can be anywhere down the page, and a
+  // panel that always drops down runs off the bottom of the viewport when the
+  // row is near it — the list scrolls, but Clear / Select all end up out of
+  // reach below the fold.
+  const [panel, setPanel] = useState({ up: false, maxList: LIST_MAX });
   const boxRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -69,6 +84,32 @@ export default function MultiSelectFilter({
   useEffect(() => {
     if (open) searchRef.current?.focus();
     else setQuery("");
+  }, [open]);
+
+  // Re-measured on scroll and resize, not just on open: the page can move under
+  // an open panel, and a panel that was measured against the old position would
+  // then be the wrong height in the wrong place.
+  useEffect(() => {
+    if (!open) return;
+    const measure = () => {
+      const rect = boxRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const below = window.innerHeight - rect.bottom - EDGE_GAP;
+      const above = rect.top - EDGE_GAP;
+      // Flip only when going up genuinely helps — otherwise a filter in a short
+      // viewport would flip to somewhere just as cramped.
+      const up = below < LIST_MIN + PANEL_CHROME && above > below;
+      const room = (up ? above : below) - PANEL_CHROME;
+      setPanel({ up, maxList: Math.max(LIST_MIN, Math.min(LIST_MAX, room)) });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    // Capturing, so a scrolling ancestor counts and not just the window.
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
   }, [open]);
 
   const filtered = useMemo(() => {
@@ -126,8 +167,15 @@ export default function MultiSelectFilter({
         <ChevronDown className="w-4 h-4 text-gray-500 shrink-0" />
       </button>
 
+      {/* z-40 clears the sticky action bars these filter rows sit above (they
+          are z-30, and an equal z-index let the bar paint over the middle of
+          this panel) while staying under the z-50 modals. */}
       {open && (
-        <div className="absolute z-30 mt-1 w-full min-w-[14rem] rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
+        <div
+          className={`absolute z-40 w-full min-w-[14rem] rounded-lg border border-gray-700 bg-gray-800 shadow-xl ${
+            panel.up ? "bottom-full mb-1" : "mt-1"
+          }`}
+        >
           <div className="flex items-center gap-2 px-2 py-2 border-b border-gray-700">
             <Search className="w-3.5 h-3.5 text-gray-500 shrink-0" />
             <input
@@ -139,7 +187,7 @@ export default function MultiSelectFilter({
             />
           </div>
 
-          <div className="max-h-64 overflow-y-auto py-1">
+          <div className="overflow-y-auto py-1" style={{ maxHeight: panel.maxList }}>
             {orphans.map((value) => (
               <Option key={`orphan-${value}`} value={value} label={value} checked onToggle={toggle} muted />
             ))}
