@@ -46,6 +46,88 @@ export async function companyInboxes(companyIds: string[]): Promise<string[]> {
   return Array.from(found);
 }
 
+/**
+ * The general inboxes of every company matching a set of audience filters,
+ * whether or not anybody is a contact there.
+ *
+ * {@link companyInboxes} answers "the inboxes of the companies these people
+ * work for", which is the right question when the audience is a list of
+ * contacts. It cannot reach a company nobody is a contact at, though: with no
+ * contact there is no company_id to hand it. An imported company list is
+ * mostly like that, so the addresses on it were reachable by no audience mode
+ * at all — this resolves companies straight from the filters instead.
+ *
+ * Visibility follows GET /api/companies exactly: staff see every company, and
+ * everyone else sees the ones they own, the legacy/global rows (user_id IS
+ * NULL) and any company they are an approved member of. There is no unlock
+ * join — an address on the company record is not a contact and there is
+ * nothing to unlock when the company has no contacts.
+ *
+ * Returns lower-cased, de-duplicated addresses.
+ */
+export async function companyInboxesByFilter(opts: {
+  userId: string;
+  isStaff: boolean;
+  approvedCompanyIds?: string[];
+  segments?: string[];
+  countries?: string[];
+  companyIds?: string[];
+  q?: string;
+}): Promise<string[]> {
+  const where: string[] = [
+    // At least one slot filled, or the row cannot be mailed at all.
+    `(COALESCE(email_general, '') <> ''
+      OR COALESCE(email_general_2, '') <> ''
+      OR COALESCE(email_general_3, '') <> '')`,
+  ];
+  const params: any[] = [];
+
+  if (!opts.isStaff) {
+    const visible = ["user_id = ?", "user_id IS NULL"];
+    params.push(opts.userId);
+    const approved = opts.approvedCompanyIds ?? [];
+    if (approved.length) {
+      visible.push(`company_id IN (${approved.map(() => "?").join(",")})`);
+      params.push(...approved);
+    }
+    where.push(`(${visible.join(" OR ")})`);
+  }
+
+  pushInClause(where, params, "company_id", opts.companyIds ?? []);
+  pushInClause(where, params, "segment", opts.segments ?? []);
+  pushInClause(where, params, "country", opts.countries ?? []);
+
+  // The picker's search box. Matched against the company name and the
+  // addresses themselves — searching for "@acme.com" is how you find the
+  // inbox when you cannot remember what the company is called.
+  const q = String(opts.q || "").trim().toLowerCase();
+  if (q) {
+    where.push(
+      `(LOWER(company_name) LIKE ?
+        OR LOWER(COALESCE(email_general, '')) LIKE ?
+        OR LOWER(COALESCE(email_general_2, '')) LIKE ?
+        OR LOWER(COALESCE(email_general_3, '')) LIKE ?)`
+    );
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
+
+  const [rows] = await db.query(
+    `SELECT email_general, email_general_2, email_general_3
+       FROM companies
+      WHERE ${where.join(" AND ")}`,
+    params
+  );
+
+  const found = new Set<string>();
+  for (const r of rows as any[]) {
+    for (const v of [r.email_general, r.email_general_2, r.email_general_3]) {
+      const e = String(v || "").trim().toLowerCase();
+      if (e && EMAIL_RE.test(e)) found.add(e);
+    }
+  }
+  return Array.from(found);
+}
+
 /** Matches MAX_EMAILS in /api/campaigns/recipients/parse. */
 export const MAX_UPLOADED_EMAILS = 50_000;
 

@@ -40,7 +40,7 @@ import {
 import { toast } from "@/hooks/use-toast";
 
 type RecipientRecord = { contact_id: string; contact_name: string | null; email: string };
-type SelectionMode = "all" | "filtered" | "selected" | "uploaded";
+type SelectionMode = "all" | "filtered" | "selected" | "uploaded" | "company_inboxes";
 
 /** Result of POST /api/campaigns/recipients/parse. */
 type UploadResult = {
@@ -352,7 +352,9 @@ export default function NewCampaign() {
       if (document.visibilityState === "visible") {
         refreshFilterOptions();
         loadCount();
-        if (mode !== "all" && mode !== "uploaded") loadPage(0, recSearch.trim().toLowerCase(), true);
+        if (mode !== "all" && mode !== "uploaded" && mode !== "company_inboxes") {
+          loadPage(0, recSearch.trim().toLowerCase(), true);
+        }
       }
     }
     window.addEventListener("focus", onVisible);
@@ -552,7 +554,8 @@ export default function NewCampaign() {
   // Reload when search, mode, or any structured filter changes.
   useEffect(() => {
     // "uploaded" has no contact list to page through — the file IS the audience.
-    if (mode === "all" || mode === "uploaded") {
+    // Neither does "company_inboxes": its audience is companies, not people.
+    if (mode === "all" || mode === "uploaded" || mode === "company_inboxes") {
       // Refresh the count to reflect the current filter set even in "all" mode.
       setVisible([]);
       setPageOffset(0);
@@ -635,6 +638,9 @@ export default function NewCampaign() {
     ? allContactsTotal
     : mode === "selected" ? selectedIds.size
     : mode === "uploaded" ? uploadedEmails.length
+    // Companies, not contacts: no local counter knows this one. The preflight
+    // total takes over below as soon as it lands.
+    : mode === "company_inboxes" ? 0
     : mode === "filtered" ? filteredTotal
     : unlockedTotal;
 
@@ -701,6 +707,12 @@ export default function NewCampaign() {
     }
     if (mode === "filtered") {
       return { mode: "filtered", q: recSearch.trim().toLowerCase() || undefined, ...filters, ...leadFlag, ...companyFlag };
+    }
+    if (mode === "company_inboxes") {
+      // Company addresses, so no unlock or contact_type filtering applies, and
+      // neither does companyFlag — adding company inboxes to company inboxes
+      // is what this mode already is.
+      return { mode: "company_inboxes", q: recSearch.trim().toLowerCase() || undefined, ...filters };
     }
     return { mode: "all", ...filters, ...leadFlag, ...companyFlag };
   }
@@ -925,6 +937,7 @@ export default function NewCampaign() {
       if (recipientsToSend === 0) {
         if (mode === "uploaded") return "Upload a file with at least one address";
         if (mode === "selected") return "Tick at least one person";
+        if (mode === "company_inboxes") return "No company inboxes match those filters — widen them";
         return "This audience is empty — widen it or pick another option";
       }
       return null;
@@ -967,6 +980,8 @@ export default function NewCampaign() {
     ? `${uploadedEmails.length.toLocaleString()} uploaded addresses from ${uploadName}`
     : mode === "selected"
     ? `${selectedIds.size.toLocaleString()} hand-picked ${selectedIds.size === 1 ? "person" : "people"}`
+    : mode === "company_inboxes"
+    ? `${(preflight?.total ?? 0).toLocaleString()} company inboxes (no named contacts)`
     : mode === "filtered"
     ? `${filteredTotal.toLocaleString()} matching your filters`
     : `Everyone — ${unlockedTotal.toLocaleString()} ${isStaff ? "contacts" : "unlocked contacts"}`;
@@ -1127,6 +1142,17 @@ export default function NewCampaign() {
                     blurb="Tick individual contacts from a list."
                   />
                   <AudienceChoice
+                    checked={mode === "company_inboxes"}
+                    onSelect={() => setMode("company_inboxes")}
+                    title="Company inboxes"
+                    detail={
+                      mode === "company_inboxes" && preflight
+                        ? `${preflight.total.toLocaleString()} inboxes`
+                        : "info@, sales@ and the like"
+                    }
+                    blurb="Mail companies directly — no contacts needed."
+                  />
+                  <AudienceChoice
                     checked={mode === "uploaded"}
                     onSelect={() => uploadedEmails.length ? setMode("uploaded") : fileInputRef.current?.click()}
                     title="Upload a list"
@@ -1228,6 +1254,88 @@ export default function NewCampaign() {
                       pageSize={PAGE_SIZE}
                       readOnly
                     />
+                  </div>
+                )}
+
+                {mode === "company_inboxes" && (
+                  <div className="mt-4 space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                      <MultiSelectFilter
+                        id="camp-inbox-segment"
+                        label="Segment"
+                        options={segmentOptions}
+                        selected={filterSegments}
+                        onChange={setFilterSegments}
+                        placeholder="All segments"
+                        searchPlaceholder="Search segments…"
+                      />
+                      <MultiSelectFilter
+                        id="camp-inbox-country"
+                        label="Country"
+                        options={countryOptions}
+                        selected={filterCountries}
+                        onChange={setFilterCountries}
+                        placeholder="All countries"
+                        searchPlaceholder="Search countries…"
+                      />
+                      <MultiSelectFilter
+                        id="camp-inbox-company"
+                        label="Company"
+                        options={companyChoices}
+                        selected={filterCompanyIds}
+                        onChange={setFilterCompanyIds}
+                        placeholder="All companies"
+                        searchPlaceholder="Search companies…"
+                      />
+                      <div className="flex items-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setFilterSegments([]); setFilterCountries([]); setFilterCompanyIds([]); }}
+                          disabled={!filterSegments.length && !filterCountries.length && !filterCompanyIds.length}
+                          className="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600 disabled:opacity-50"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => refreshFilterOptions()}
+                          className="px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-sm hover:border-gray-600"
+                          title="Reload companies"
+                        >
+                          <RefreshCcw className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label htmlFor="inbox-search" className="block text-xs text-gray-400 mb-1">
+                        Search by company name or address (optional)
+                      </label>
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+                        <input
+                          id="inbox-search"
+                          type="text"
+                          value={recSearch}
+                          onChange={(e) => setRecSearch(e.target.value)}
+                          placeholder="e.g. acme, @acme.com"
+                          className="w-full pl-8 pr-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200"
+                        />
+                      </div>
+                    </div>
+
+                    {/* No per-address preview list. One company can hold three
+                        addresses and two companies can share one, so only the
+                        server knows what the filters add up to — that is the
+                        preflight count, and showing a second guess beside it
+                        would just be a number that disagrees. */}
+                    <p className="text-xs text-gray-400">
+                      {preflightLoading
+                        ? "Counting company inboxes…"
+                        : preflight
+                        ? `${preflight.total.toLocaleString()} company ${preflight.total === 1 ? "inbox" : "inboxes"} to send to`
+                        : "Narrow it down with the filters above, or send to every company you can see."}
+                    </p>
                   </div>
                 )}
 
@@ -1433,7 +1541,7 @@ export default function NewCampaign() {
                 without this the shared inbox — often the address that actually
                 gets read — never receives the mail. Not offered for an uploaded
                 list, which has no companies behind it. */}
-            {mode !== "uploaded" && (
+            {mode !== "uploaded" && mode !== "company_inboxes" && (
               <label className="mt-3 flex items-start gap-3 rounded-lg border border-gray-800 bg-gray-900/40 p-3 cursor-pointer">
                 <input
                   type="checkbox"

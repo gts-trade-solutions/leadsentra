@@ -4,7 +4,14 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
-import { multiFilter, pushInClause, normalizeUploadedEmails, companyInboxes } from "@/lib/audience";
+import {
+  multiFilter,
+  pushInClause,
+  normalizeUploadedEmails,
+  companyInboxes,
+  companyInboxesByFilter,
+} from "@/lib/audience";
+import { getApprovedCompanyIds } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,7 +39,8 @@ export async function GET() {
  *     status?: 'draft' | 'scheduled' | 'sending',
  *     scheduled_at?: ISO string,
  *     audience: {
- *       mode: 'all' | 'filtered' | 'selected' | 'uploaded' | 'admin_all',
+ *       mode: 'all' | 'filtered' | 'selected' | 'uploaded' | 'admin_all'
+ *           | 'company_inboxes',
  *       q?: string,             // when mode === 'filtered', server applies it
  *       contact_ids?: string[], // when mode === 'selected'
  *       emails?: string[],      // when mode === 'uploaded' (one-off list)
@@ -67,7 +75,8 @@ export async function POST(req: Request) {
   let mode = String(audience.mode || "all").toLowerCase();
   const callerIsStaff = isStaff(session.role);
   if (mode === "admin_all" && !callerIsStaff) mode = "all"; // silently downgrade non-staff
-  if (!["all", "filtered", "selected", "admin_all", "uploaded"].includes(mode)) mode = "all";
+  if (!["all", "filtered", "selected", "admin_all", "uploaded", "company_inboxes"].includes(mode))
+    mode = "all";
   // Audience-side bypass: `admin_all` mode resolves to EVERY contact (ignores unlocks).
   const isAdminAudience = mode === "admin_all";
   // Credit-side bypass: any staff caller (admin OR moderator) sends for free,
@@ -180,6 +189,26 @@ export async function POST(req: Request) {
       }
       recipients = uploadedEmails.map((email) => ({ id: byEmail.get(email) ?? null, email }));
     }
+  } else if (mode === "company_inboxes") {
+    // Companies, not people. The addresses come off the company record itself,
+    // so a company with no contacts — most of an imported list — is reachable
+    // here and nowhere else. contact_id stays NULL: nobody is being written to.
+    const emails = await companyInboxesByFilter({
+      userId: session.id,
+      isStaff: callerIsStaff,
+      approvedCompanyIds: callerIsStaff ? [] : await getApprovedCompanyIds(session.id),
+      segments: filterSegments,
+      countries: filterCountries,
+      companyIds: filterCompanyIds,
+      q: search,
+    });
+    if (!emails.length && status === "sending") {
+      return NextResponse.json(
+        { error: "No company email addresses match those filters" },
+        { status: 400 }
+      );
+    }
+    recipients = emails.map((email) => ({ id: null, email }));
   } else if (isAdminBypass) {
     // Explicit admin compose: send to EVERY contact with a valid email
     // (restricted to leads only when the send is a catalogue/offer).
@@ -225,7 +254,7 @@ export async function POST(req: Request) {
 
   // Append the general inboxes of every company represented in the audience.
   // contact_id stays NULL — these are company addresses, not people.
-  if (includeCompanyEmails && recipients.length) {
+  if (includeCompanyEmails && recipients.length && mode !== "company_inboxes") {
     const inboxes = await companyInboxes(
       recipients.map((r) => r.company_id).filter(Boolean) as string[]
     );

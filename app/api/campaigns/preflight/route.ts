@@ -3,7 +3,14 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
-import { multiFilter, pushInClause, normalizeUploadedEmails, companyInboxes } from "@/lib/audience";
+import {
+  multiFilter,
+  pushInClause,
+  normalizeUploadedEmails,
+  companyInboxes,
+  companyInboxesByFilter,
+} from "@/lib/audience";
+import { getApprovedCompanyIds } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,7 +26,7 @@ export const runtime = "nodejs";
  *   "Will send to 4,123  ·  91 already suppressed (skipped)"
  *
  * Body shape mirrors the audience portion of POST /api/campaigns:
- *   { mode: 'all' | 'filtered' | 'selected' | 'admin_all',
+ *   { mode: 'all' | 'filtered' | 'selected' | 'admin_all' | 'company_inboxes',
  *     q?: string, contact_ids?: string[] }
  */
 export async function POST(req: Request) {
@@ -31,7 +38,8 @@ export async function POST(req: Request) {
   const callerIsStaff = isStaff(session.role);
   let mode = String(audience?.mode || "all").toLowerCase();
   if (mode === "admin_all" && !callerIsStaff) mode = "all";
-  if (!["all", "filtered", "selected", "admin_all", "uploaded"].includes(mode)) mode = "all";
+  if (!["all", "filtered", "selected", "admin_all", "uploaded", "company_inboxes"].includes(mode))
+    mode = "all";
   const search = String(audience?.q || "").trim().toLowerCase();
   // Multi-select filters; legacy singular keys still honored. Must match
   // POST /api/campaigns exactly or the preview count lies.
@@ -70,6 +78,19 @@ export async function POST(req: Request) {
   } else if (mode === "uploaded") {
     // Already normalized + deduped; no DB lookup needed to count it.
     recipients = uploadedEmails.map((email) => ({ email }));
+  } else if (mode === "company_inboxes") {
+    // Resolved the same way as POST /api/campaigns, or the previewed count
+    // stops matching what the send produces.
+    const emails = await companyInboxesByFilter({
+      userId: session.id,
+      isStaff: callerIsStaff,
+      approvedCompanyIds: callerIsStaff ? [] : await getApprovedCompanyIds(session.id),
+      segments: filterSegments,
+      countries: filterCountries,
+      companyIds: filterCompanyIds,
+      q: search,
+    });
+    recipients = emails.map((email) => ({ email }));
   } else if (mode === "admin_all") {
     const [rows] = await db.query(
       `SELECT email, company_id FROM contacts WHERE email IS NOT NULL AND email <> ''
@@ -104,7 +125,7 @@ export async function POST(req: Request) {
 
   // Same company-inbox append as POST /api/campaigns, so the previewed count
   // matches what the send actually produces.
-  if (includeCompanyEmails && recipients.length) {
+  if (includeCompanyEmails && recipients.length && mode !== "company_inboxes") {
     const inboxes = await companyInboxes(
       recipients.map((r) => r.company_id).filter(Boolean) as string[]
     );
