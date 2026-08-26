@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/admin";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 
@@ -10,7 +11,7 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (session.role !== "admin") {
+  if (!isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

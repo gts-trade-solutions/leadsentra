@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import Table from "@/components/Table";
 import EmptyState from "@/components/EmptyState";
+import { isAdmin as isAdminRole } from "@/lib/roles";
 import { toast } from "@/hooks/use-toast";
+import { pendingToast } from "@/lib/deletePending";
 import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
 import SelectAllCheckbox from "@/components/SelectAllCheckbox";
@@ -30,6 +32,7 @@ import {
   CheckCircle2,
   Pencil,
   Trash2,
+  ListChecks,
 } from "lucide-react";
 // Supabase client removed during MySQL migration; auth/wallet now use /api/* routes.
 
@@ -167,7 +170,7 @@ type AssetsState = {
 
 export default function CompaniesPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
   // Staff (admin + moderator) can bulk-import; regular users can't.
   const canImport = isAdmin || user?.role === "moderator";
 
@@ -325,6 +328,7 @@ export default function CompaniesPage() {
   const [approvedCountries, setApprovedCountries] = useState<string[]>([]);
   const [reviewCount, setReviewCount] = useState(0);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewTab, setReviewTab] = useState<"review" | "lists">("review");
 
   async function loadVocab() {
     try {
@@ -1383,16 +1387,39 @@ export default function CompaniesPage() {
 
         {/* Bulk import — staff only (admins + moderators).
             Regular users can't upload CSVs; they have the per-row "Add Company" modal instead. */}
-        {/* Values stored on companies that aren't on the approved lists. Shown
-            only when there are some, so a clean database has no extra chrome. */}
-        {canImport && reviewCount > 0 && (
+        {/* Values stored on companies that aren't on the approved lists, and the
+            lists themselves. The amber call-to-action only appears when there is
+            something to review; otherwise this is the quiet way in to the lists,
+            which must stay reachable — a clean database is exactly when you go
+            looking for a segment you want to delete. */}
+        {canImport && (
           <button
-            onClick={() => setReviewOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
-            title="Spelling mistakes and unknown values found in the company data"
+            onClick={() => {
+              setReviewTab(reviewCount > 0 ? "review" : "lists");
+              setReviewOpen(true);
+            }}
+            className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg text-sm font-medium transition-colors ${
+              reviewCount > 0
+                ? "bg-amber-700 hover:bg-amber-600"
+                : "bg-gray-700 hover:bg-gray-600"
+            }`}
+            title={
+              reviewCount > 0
+                ? "Spelling mistakes and unknown values found in the company data"
+                : "The approved Company type / Segment / Country lists — add or delete values"
+            }
           >
-            <AlertTriangle className="w-4 h-4" />
-            Needs review ({reviewCount})
+            {reviewCount > 0 ? (
+              <>
+                <AlertTriangle className="w-4 h-4" />
+                Needs review ({reviewCount})
+              </>
+            ) : (
+              <>
+                <ListChecks className="w-4 h-4" />
+                Lists
+              </>
+            )}
           </button>
         )}
 
@@ -1477,10 +1504,14 @@ export default function CompaniesPage() {
 
       <DataReviewModal
         open={reviewOpen}
+        initialTab={reviewTab}
         onClose={() => setReviewOpen(false)}
         onApplied={async () => {
           await load();
           await loadVocab();
+          // Segments live in their own table and feed their own dropdown, so a
+          // deleted one only disappears from the filter bar once this reruns.
+          await loadSegments();
         }}
       />
 
@@ -1846,6 +1877,13 @@ export default function CompaniesPage() {
                     });
                     const j = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(j?.error || "Delete failed");
+                    if (j?.pending) {
+                      // Parked for a super admin — the companies are still
+                      // there, so the selection stays as it is.
+                      toast(pendingToast(j.message));
+                      setShowBulkDelete(false);
+                      return;
+                    }
                     toast({
                       title: "Companies deleted",
                       description: `${j.deleted ?? 0} removed${j.skipped ? ` · ${j.skipped} skipped (have contacts)` : ""}`,

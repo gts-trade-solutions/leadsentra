@@ -20,6 +20,7 @@ import SectionHeader from "@/components/SectionHeader";
 import EmptyState from "@/components/EmptyState";
 import MultiSelectFilter from "@/components/MultiSelectFilter";
 import { toast } from "@/hooks/use-toast";
+import { readDeleteResponse, pendingToast } from "@/lib/deletePending";
 
 // sessionStorage key the campaign composer reads to prefill a send.
 const HANDOFF_KEY = "leadsentra:catalogue_send";
@@ -159,9 +160,10 @@ export default function CataloguesPage() {
         method: "DELETE",
         credentials: "same-origin",
       });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || "Delete failed");
+      const out = await readDeleteResponse(res);
+      if (out.pending) {
+        toast(pendingToast(out.message));
+        return;
       }
       toast({ title: "Deleted" });
       loadItems();

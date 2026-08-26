@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { isAdmin } from "@/lib/admin";
 import { getUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -81,11 +82,11 @@ export async function GET(req: Request) {
     sp.getAll(name).flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
   const one = (name: string) => (sp.get(name) || "").trim();
 
-  const isAdmin = session.role === "admin";
+  const admin = isAdmin(session.role);
   const clauses: string[] = [];
   const params: any[] = [];
 
-  if (!isAdmin) {
+  if (!admin) {
     clauses.push("(user_id = ? OR user_id IS NULL)");
     params.push(session.id);
   }

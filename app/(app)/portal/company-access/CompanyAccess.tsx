@@ -7,6 +7,7 @@ import { Building2, Check, Clock, X, Plus, RefreshCcw, ShieldCheck } from "lucid
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import { useOptionalAuth } from "@/components/AuthProvider";
+import { isAdmin as isAdminRole } from "@/lib/roles";
 import { toast } from "@/hooks/use-toast";
 
 type Membership = {
@@ -25,7 +26,7 @@ const inputCls =
 
 export default function CompanyAccess() {
   const { user } = useOptionalAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [companies, setCompanies] = useState<CompanyOpt[]>([]);
   const [loading, setLoading] = useState(true);

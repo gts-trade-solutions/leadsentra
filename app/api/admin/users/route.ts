@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
-import { requireRole } from "@/lib/admin";
+import { requireRole, isAdmin } from "@/lib/admin";
 import { validatePassword } from "@/lib/password";
 
 export const dynamic = "force-dynamic";
@@ -78,7 +78,7 @@ export async function POST(req: Request) {
   }
   // Only admins can mint admins (defense in depth — outer requireRole already
   // requires admin, but this stays correct if we ever loosen that).
-  if (role === "admin" && caller.role !== "admin") {
+  if (role === "admin" && !isAdmin(caller.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const pwErr = validatePassword(password);

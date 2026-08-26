@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
-import { isStaff } from "@/lib/admin";
+import { isStaff, isAdmin } from "@/lib/admin";
 import { accessibleCompanyFilter } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
@@ -99,11 +99,11 @@ async function handle(qs: URLSearchParams) {
     qs.getAll(key).map((s) => s.trim()).filter(Boolean);
   const one = (key: string) => (qs.get(key) || "").trim();
 
-  const isAdmin = session.role === "admin";
+  const admin = isAdmin(session.role);
   const where: string[] = [];
   const params: any[] = [];
 
-  if (!isAdmin) {
+  if (!admin) {
     const f = await accessibleCompanyFilter(session.id, "c", "co");
     where.push(f.sql);
     params.push(...f.params);

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getUser } from "@/lib/auth";
+import { isAdmin } from "@/lib/roles";
 import PlatformAdmin from "./PlatformAdmin";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export default async function Page() {
   if (!session) {
     redirect("/auth/signin?next=/portal/platform-admin");
   }
-  if (session.role !== "admin") {
+  if (!isAdmin(session.role)) {
     // Moderators already have credit-bypass globally — no panel needed.
     // Regular users have no business here either.
     redirect("/portal");

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { getUser } from "@/lib/auth";
 import { getTemplate, updateTemplate, deleteTemplate } from "@/lib/offerTemplatesRepo";
 import { sanitizeBlocks } from "@/lib/offerTemplate";
@@ -48,6 +49,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const gate = await gateDelete(session, { resource: "offer_template", id: params.id });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
+
   const ok = await deleteTemplate(session.id, params.id);
   if (!ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ ok: true });

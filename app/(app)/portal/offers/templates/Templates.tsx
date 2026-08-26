@@ -9,6 +9,7 @@ import {
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import { toast } from "@/hooks/use-toast";
+import { readDeleteResponse, pendingToast } from "@/lib/deletePending";
 import { DEFAULT_LBI_BLOCKS } from "@/lib/offerTemplate";
 
 type Block = any;
@@ -184,7 +185,11 @@ export default function OfferTemplates() {
     if (!confirm(`Delete template "${t.name}"? Offers already created keep their saved layout.`)) return;
     try {
       const res = await fetch(`/api/offer-templates/${t.id}`, { method: "DELETE", credentials: "same-origin" });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || "Failed");
+      const out = await readDeleteResponse(res);
+      if (out.pending) {
+        toast(pendingToast(out.message));
+        return;
+      }
       toast({ title: "Template deleted" });
       load();
     } catch (e: any) {

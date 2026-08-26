@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import SectionHeader from "@/components/SectionHeader";
 import Table from "@/components/Table";
 import EmptyState from "@/components/EmptyState";
+import { isAdmin as isAdminRole } from "@/lib/roles";
 import { toast } from "@/hooks/use-toast";
+import { pendingToast } from "@/lib/deletePending";
 import { useAuth } from "@/components/AuthProvider";
 import { CardScanButton, type ScanExtracted } from "@/components/CardScanButton";
 import SelectAllCheckbox from "@/components/SelectAllCheckbox";
@@ -145,7 +147,7 @@ export default function ContactsPage() {
 
   // auth/portal (from shared AuthProvider context)
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
   // Staff (admin + moderator) bypass the unlock/credit flow entirely.
   const isStaffUser = isAdmin || user?.role === "moderator";
 
@@ -2044,6 +2046,13 @@ export default function ContactsPage() {
                     });
                     const j = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(j?.error || "Delete failed");
+                    if (j?.pending) {
+                      // Parked for a super admin — the contacts are still
+                      // there, so the selection stays as it is.
+                      toast(pendingToast(j.message));
+                      setShowBulkDelete(false);
+                      return;
+                    }
                     toast({
                       title: "Contacts deleted",
                       description: `${j.deleted ?? 0} removed${j.skipped ? ` · ${j.skipped} skipped` : ""}`,

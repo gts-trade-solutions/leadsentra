@@ -371,6 +371,58 @@ export async function insertTerm(
 }
 
 /**
+ * Remove a term from whichever table backs `kind`. Idempotent.
+ *
+ * This only takes the value out of the list — what happens to companies still
+ * holding it is the caller's decision. The "delete" action in
+ * /api/companies/vocab clears the column first, so a deleted value is never
+ * left sitting on a company where nothing on any list explains it.
+ *
+ * Same missing-table tolerance as insertTerm.
+ */
+export async function deleteTerm(
+  conn: Queryable,
+  kind: VocabKind,
+  name: string
+): Promise<void> {
+  try {
+    if (kind === "segment") {
+      await conn.execute("DELETE FROM company_segments WHERE name = ?", [name]);
+      return;
+    }
+    await conn.execute(
+      "DELETE FROM vocab_terms WHERE vocabulary = ? AND name = ?",
+      [kind, name]
+    );
+  } catch (e) {
+    if (!isMissingTable(e)) throw e;
+  }
+}
+
+/**
+ * Drop the mappings that pointed at a term being deleted.
+ *
+ * buildVocabulary already ignores an alias whose canonical is gone, so this
+ * isn't what stops the old spelling coming back. It stops dead rows piling up,
+ * and stops a later term that happens to reuse the name silently inheriting
+ * mappings that were decided about a different one.
+ */
+export async function deleteAliasesTo(
+  conn: Queryable,
+  kind: VocabKind,
+  canonical: string
+): Promise<void> {
+  try {
+    await conn.execute(
+      "DELETE FROM vocab_aliases WHERE vocabulary = ? AND canonical = ?",
+      [kind, canonical]
+    );
+  } catch (e) {
+    if (!isMissingTable(e)) throw e;
+  }
+}
+
+/**
  * Remember that `from` means `to`, so the next upload of that spelling is
  * corrected without anyone looking at it. `source` distinguishes a mapping a
  * human confirmed from one the importer inferred.

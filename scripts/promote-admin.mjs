@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// One-shot helper: promote a user to admin (or moderator) by email.
+// One-shot helper: promote a user to super_admin, admin or moderator by email.
 // Usage:
 //   node scripts/promote-admin.mjs you@example.com          -> role='admin'
-//   node scripts/promote-admin.mjs you@example.com moderator -> role='moderator'
+//   node scripts/promote-admin.mjs you@example.com moderator   -> role='moderator'
+//   node scripts/promote-admin.mjs you@example.com super_admin -> role='super_admin'
+//
+// super_admin is the only role that can delete shared data outright, and the
+// only one that can approve the delete requests admins raise.
 //
 // Reads MYSQL_* from .env.local in the project root.
 
@@ -33,11 +37,11 @@ const email = (process.argv[2] || "").trim().toLowerCase();
 const role = (process.argv[3] || "admin").trim().toLowerCase();
 
 if (!email) {
-  console.error("Usage: node scripts/promote-admin.mjs <email> [admin|moderator|user]");
+  console.error("Usage: node scripts/promote-admin.mjs <email> [super_admin|admin|moderator|user]");
   process.exit(1);
 }
-if (!["admin", "moderator", "user"].includes(role)) {
-  console.error(`Invalid role '${role}'. Must be admin, moderator, or user.`);
+if (!["super_admin", "admin", "moderator", "user"].includes(role)) {
+  console.error(`Invalid role '${role}'. Must be super_admin, admin, moderator, or user.`);
   process.exit(1);
 }
 
@@ -65,7 +69,7 @@ try {
   }
   // Staff accounts (admin/moderator) must be email-verified to log in.
   // Auto-verify when promoting so the account is usable.
-  if (role === "admin" || role === "moderator") {
+  if (role === "super_admin" || role === "admin" || role === "moderator") {
     await conn.execute(
       "UPDATE users SET role = ?, email_verified = 1 WHERE id = ?",
       [role, before.id]

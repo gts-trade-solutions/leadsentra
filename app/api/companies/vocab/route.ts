@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import {
   loadVocabularies,
   resolveTerm,
   suggestTerm,
   recordAlias,
   insertTerm,
+  deleteTerm,
+  deleteAliasesTo,
   vocabKey,
   stemKey,
   similarity,
@@ -28,16 +31,21 @@ export const runtime = "nodejs";
  *   -> { terms }                       for any signed-in user (feeds the filter
  *                                      dropdowns, so they only ever offer real
  *                                      values)
- *   -> { terms, review, duplicates }   for staff, where `review` is every value
+ *   -> { terms, review, duplicates, usage }
+ *                                      for staff, where `review` is every value
  *                                      stored on a company that isn't an
  *                                      approved term — each with a suggested
- *                                      mapping — and `duplicates` is approved
- *                                      terms that look like each other.
+ *                                      mapping — `duplicates` is approved
+ *                                      terms that look like each other, and
+ *                                      `usage` counts the companies sitting on
+ *                                      each approved term, so the lists screen
+ *                                      can say what deleting one would clear.
  *
  * POST /api/companies/vocab   staff only
  *   { kind, action: "map",     from: string[], to: string }
  *   { kind, action: "approve", from: string[] }
  *   { kind, action: "clear",   from: string[] }
+ *   { kind, action: "delete",  from: string[] }
  *
  * Nothing here is derived from a stored queue: `review` is recomputed from the
  * companies table on every request, so it also surfaces junk that predates the
@@ -156,6 +164,7 @@ export async function GET() {
 
   const review: ReviewRow[] = [];
   const duplicates: ReturnType<typeof duplicateTerms> = [];
+  const usage = {} as Record<VocabKind, Record<string, number>>;
 
   for (const kind of VOCAB_KINDS) {
     const values = await distinctValues(kind);
@@ -167,10 +176,17 @@ export async function GET() {
       counts.set(k, (counts.get(k) ?? 0) + v.rows);
     }
     duplicates.push(...duplicateTerms(vocab[kind], kind, counts));
+
+    // Companies sitting on each approved term. Counted case-insensitively,
+    // matching what a delete would actually clear (its UPDATE compares under
+    // the column's own case-insensitive collation).
+    usage[kind] = Object.fromEntries(
+      vocab[kind].terms.map((t) => [t, counts.get(t.toLowerCase()) ?? 0])
+    );
   }
 
   review.sort((a, b) => b.rows - a.rows);
-  return NextResponse.json({ terms, review, duplicates });
+  return NextResponse.json({ terms, review, duplicates, usage });
 }
 
 export async function POST(req: Request) {
@@ -261,6 +277,43 @@ export async function POST(req: Request) {
         from
       );
       changed = Number(res?.affectedRows) || 0;
+    } else if (action === "delete") {
+      // Removing a value from a list is a delete of shared data — it changes
+      // every company holding it — so an admin asks and a super admin decides.
+      // One request per value, so each can be approved on its own merits.
+      // `finally` below releases the connection, so we only roll back here.
+      let pending: Awaited<ReturnType<typeof gateDelete>> | null = null;
+      for (const f of from) {
+        const g = await gateDelete(session, {
+          resource: "list_value",
+          id: f,
+          label: `${VOCAB_LABEL[kind]}: ${f}`,
+          payload: { kind },
+        });
+        if (!g.allowed && !pending) pending = g;
+      }
+      if (pending && !pending.allowed) {
+        await conn.rollback();
+        return pendingDeleteResponse(pending);
+      }
+
+      for (const f of from) {
+        // Clear the field on every company holding the value BEFORE dropping
+        // the term. Leaving the rows alone would only park the value back in
+        // "Needs review" as an unapproved value on the next load, so deleting
+        // it from the list would appear not to have worked.
+        //
+        // The comparison is the column's own case-insensitive collation — the
+        // same set of rows `approve` folds together — so a value stored as
+        // "manufacturer" is cleared by deleting "Manufacturer".
+        const [res]: any = await conn.query(
+          `UPDATE companies SET ${col} = NULL WHERE TRIM(${col}) = ?`,
+          [f]
+        );
+        changed += Number(res?.affectedRows) || 0;
+        await deleteTerm(conn, kind, f);
+        await deleteAliasesTo(conn, kind, f);
+      }
     } else {
       await conn.rollback();
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });

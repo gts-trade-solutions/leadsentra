@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/admin";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 
@@ -10,7 +12,7 @@ export async function POST(req: Request) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   // Bulk delete is admin-only. Moderators/users hitting this endpoint should
   // get the same Forbidden as if it didn't exist — they have per-row delete.
-  if (session.role !== "admin") {
+  if (!isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden — admin only" }, { status: 403 });
   }
 
@@ -18,6 +20,14 @@ export async function POST(req: Request) {
   const ids: string[] = Array.isArray(body?.ids) ? body.ids.filter((x: any) => typeof x === "string" && x) : [];
   if (!ids.length) return NextResponse.json({ error: "Missing ids" }, { status: 400 });
   if (ids.length > 5000) return NextResponse.json({ error: "Too many ids (max 5000)" }, { status: 400 });
+
+  // Admin-only endpoint, so this always gates unless a super admin is calling.
+  const gate = await gateDelete(session, {
+    resource: "contact_bulk",
+    label: `${ids.length} ${ids.length === 1 ? "contact" : "contacts"}`,
+    payload: { ids },
+  });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
 
   const placeholders = ids.map(() => "?").join(",");
 

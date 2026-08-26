@@ -20,13 +20,15 @@ import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import StatCard from "@/components/StatCard";
 import { useAuth } from "@/components/AuthProvider";
+import { isAdmin as isAdminRole, isSuperAdmin, roleLabel } from "@/lib/roles";
 import { toast } from "@/hooks/use-toast";
+import { pendingToast } from "@/lib/deletePending";
 
 type UserRow = {
   id: string;
   email: string;
   full_name: string | null;
-  role: "user" | "moderator" | "admin";
+  role: "user" | "moderator" | "admin" | "super_admin";
   email_verified: number | boolean;
   created_at: string;
   balance: number;
@@ -51,9 +53,33 @@ type Tab = "overview" | "users" | "prices" | "topup" | "campaign";
 
 export default function PlatformAdmin() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
+  const isSuper = isSuperAdmin(user?.role);
 
   const [tab, setTab] = useState<Tab>("overview");
+
+  // How many deletions are waiting on a super admin. The API returns 0 for
+  // anyone who can't act on them, so the badge only appears for the person who
+  // can actually clear it.
+  const [deletePending, setDeletePending] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/delete-requests?status=pending", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) setDeletePending(Number(json?.pending) || 0);
+      } catch {
+        /* the link still works without a count */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Admin-only page.  Moderators get the global credit bypass but no UI here.
   if (user && !isAdmin) {
@@ -85,7 +111,7 @@ export default function PlatformAdmin() {
         >
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-emerald-900/30 text-emerald-200 border border-emerald-700">
             <ShieldCheck className="w-3.5 h-3.5" />
-            {user?.role}
+            {roleLabel(user?.role)}
           </span>
         </SectionHeader>
 
@@ -113,6 +139,27 @@ export default function PlatformAdmin() {
             <span className="text-emerald-400">Open →</span>
           </Link>
         )}
+
+        {/* Open to every staff member: a super admin decides here, an admin
+            comes here to see whether what they asked for went through. */}
+        <Link
+          href="/portal/platform-admin/delete-requests"
+          className={`mb-4 flex items-center justify-between gap-2 rounded-lg border px-4 py-3 text-sm ${
+            deletePending > 0
+              ? "border-amber-700/60 bg-amber-950/20 hover:border-amber-500"
+              : "border-gray-700 bg-gray-900/40 hover:border-gray-600"
+          }`}
+        >
+          <span className={deletePending > 0 ? "text-amber-100" : "text-gray-300"}>
+            <b>Delete requests</b>
+            {deletePending > 0
+              ? ` — ${deletePending} waiting on you. Approving carries the deletion out.`
+              : isSuper
+              ? " — deletions admins have asked you to approve."
+              : " — deletions you have asked a super admin to approve."}
+          </span>
+          <span className={deletePending > 0 ? "text-amber-300" : "text-gray-400"}>Open →</span>
+        </Link>
 
         {tab === "overview" && <OverviewTab />}
         {tab === "users"    && <UsersTab isAdmin={isAdmin} />}
@@ -274,6 +321,10 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) {
       toast({ variant: "destructive", title: "Delete failed", description: d?.error || "" });
+      return;
+    }
+    if (d?.pending) {
+      toast(pendingToast(d.message));
       return;
     }
     toast({ title: "User deleted" });

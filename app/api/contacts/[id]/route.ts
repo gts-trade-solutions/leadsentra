@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/admin";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { cleanPhone, cleanUrl, type CleanResult, type UrlPlatform } from "@/lib/validate";
@@ -19,9 +21,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const existing = await fetchOwned(params.id, session.id, session.role === "admin");
+  const existing = await fetchOwned(params.id, session.id, isAdmin(session.role));
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (existing.user_id && existing.user_id !== session.id && session.role !== "admin") {
+  if (existing.user_id && existing.user_id !== session.id && !isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -98,11 +100,20 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const existing = await fetchOwned(params.id, session.id, session.role === "admin");
+  const existing = await fetchOwned(params.id, session.id, isAdmin(session.role));
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (existing.user_id && existing.user_id !== session.id && session.role !== "admin") {
+  if (existing.user_id && existing.user_id !== session.id && !isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  // Staff below super admin ask instead of deleting. A user deleting their own
+  // contact is unaffected.
+  const gate = await gateDelete(session, {
+    resource: "contact",
+    id: params.id,
+    label: existing.contact_name || existing.email || params.id,
+  });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
 
   // Clean up unlock / campaign-recipient rows that reference this contact
   await db.execute("DELETE FROM unlocked_contacts WHERE contact_id = ?", [params.id]);

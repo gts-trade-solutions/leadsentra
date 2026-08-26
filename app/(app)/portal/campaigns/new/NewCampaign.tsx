@@ -37,6 +37,7 @@ import {
   listIdentities,
   type EmailIdentityRow,
 } from "@/lib/sender";
+import { isStaff as isStaffRole } from "@/lib/roles";
 import { toast } from "@/hooks/use-toast";
 
 type RecipientRecord = { contact_id: string; contact_name: string | null; email: string };
@@ -58,7 +59,7 @@ export default function NewCampaign() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useOptionalAuth();
-  const isStaff = user?.role === "admin" || user?.role === "moderator";
+  const isStaff = isStaffRole(user?.role);
   const { startSend } = useJobs();
   // Admin compose mode: ?admin=1 (only honored for staff).  Sends to EVERY
   // contact with an email (ignores unlocks) and skips credit charging.

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { getUser } from "@/lib/auth";
 import { updateOrder, deleteOrder } from "@/lib/orders";
 
@@ -23,6 +24,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const gate = await gateDelete(session, { resource: "order", id: params.id });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
+
   const ok = await deleteOrder(session.id, params.id);
   if (!ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ ok: true });

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/admin";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 
@@ -14,7 +16,7 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.role !== "admin") {
+  if (!isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden — admin only" }, { status: 403 });
   }
 
@@ -26,6 +28,16 @@ export async function POST(req: Request) {
   if (ids.length > 5000) {
     return NextResponse.json({ error: "Too many ids (max 5000)" }, { status: 400 });
   }
+
+  // Bulk delete is admin-only, so this always gates unless a super admin is
+  // calling. The whole selection goes on one request — approving it deletes
+  // exactly the set that was asked about.
+  const gate = await gateDelete(session, {
+    resource: "company_bulk",
+    label: `${ids.length} ${ids.length === 1 ? "company" : "companies"}`,
+    payload: { ids },
+  });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
 
   const placeholders = ids.map(() => "?").join(",");
   const [blockedRows] = await db.query(

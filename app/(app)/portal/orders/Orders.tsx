@@ -8,6 +8,7 @@ import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import EmptyState from "@/components/EmptyState";
 import { toast } from "@/hooks/use-toast";
+import { readDeleteResponse, pendingToast } from "@/lib/deletePending";
 import { formatMoney } from "@/lib/invoices";
 
 type Order = {
@@ -73,7 +74,11 @@ export default function OrdersPage() {
     setBusyId(row.id);
     try {
       const res = await fetch(`/api/orders/${row.id}`, { method: "DELETE", credentials: "same-origin" });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || "Delete failed");
+      const out = await readDeleteResponse(res);
+      if (out.pending) {
+        toast(pendingToast(out.message));
+        return;
+      }
       setRows((prev) => prev.filter((r) => r.id !== row.id));
       toast({ title: "Order deleted" });
     } catch (e: any) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
@@ -104,6 +105,13 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (existing.user_id && existing.user_id !== session.id && !staff) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const gate = await gateDelete(session, {
+    resource: "catalogue",
+    id: params.id,
+    label: existing.title || existing.file_name || params.id,
+  });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
 
   await db.execute("DELETE FROM company_catalogues WHERE id = ?", [params.id]);
   return NextResponse.json({ ok: true });

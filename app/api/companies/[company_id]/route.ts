@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/lib/admin";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { cleanDepartments } from "@/lib/departments";
@@ -48,9 +50,9 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const existing = await fetchOwned(params.company_id, session.id, session.role === "admin");
+  const existing = await fetchOwned(params.company_id, session.id, isAdmin(session.role));
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (existing.user_id && existing.user_id !== session.id && session.role !== "admin") {
+  if (existing.user_id && existing.user_id !== session.id && !isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -171,7 +173,7 @@ export async function PATCH(req: Request, { params }: { params: { company_id: st
   const renaming = requestedId !== null && requestedId !== params.company_id;
 
   if (renaming) {
-    if (session.role !== "admin") {
+    if (!isAdmin(session.role)) {
       return NextResponse.json(
         { error: "Only an admin can change a company ID" },
         { status: 403 }
@@ -256,11 +258,20 @@ export async function DELETE(_req: Request, { params }: { params: { company_id: 
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const existing = await fetchOwned(params.company_id, session.id, session.role === "admin");
+  const existing = await fetchOwned(params.company_id, session.id, isAdmin(session.role));
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (existing.user_id && existing.user_id !== session.id && session.role !== "admin") {
+  if (existing.user_id && existing.user_id !== session.id && !isAdmin(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  // Staff below super admin ask instead of deleting. The owner deleting their
+  // own company is unaffected.
+  const gate = await gateDelete(session, {
+    resource: "company",
+    id: params.company_id,
+    label: existing.company_name || existing.legal_name || params.company_id,
+  });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
 
   const [cnt] = await db.execute(
     "SELECT COUNT(*) AS c FROM contacts WHERE company_id = ?",

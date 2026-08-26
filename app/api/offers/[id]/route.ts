@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { loadOfferWithRoutes } from "@/lib/offerRepo";
@@ -21,6 +22,20 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await getUser();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const [own] = await db.execute(
+    "SELECT id, offer_number FROM offers WHERE id = ? AND user_id = ? LIMIT 1",
+    [params.id, session.id]
+  );
+  const offer = (own as any[])[0];
+  if (!offer) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const gate = await gateDelete(session, {
+    resource: "offer",
+    id: params.id,
+    label: offer.offer_number || params.id,
+  });
+  if (!gate.allowed) return pendingDeleteResponse(gate);
 
   const [res] = await db.execute(
     "DELETE FROM offers WHERE id = ? AND user_id = ?",
