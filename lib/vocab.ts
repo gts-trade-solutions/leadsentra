@@ -400,6 +400,31 @@ export async function deleteTerm(
 }
 
 /**
+ * Point the mappings that led to `from` at `to` instead.
+ *
+ * Used when two approved terms are merged: the losing spelling leaves the list,
+ * but everything the importer already learned about reaching it is still
+ * correct — it just needs to arrive at the surviving term now. Deleting those
+ * aliases instead would throw away the corrections and let the same
+ * misspellings come back through the next upload.
+ */
+export async function repointAliases(
+  conn: Queryable,
+  kind: VocabKind,
+  from: string,
+  to: string
+): Promise<void> {
+  try {
+    await conn.execute(
+      "UPDATE vocab_aliases SET canonical = ? WHERE vocabulary = ? AND canonical = ?",
+      [to, kind, from]
+    );
+  } catch (e) {
+    if (!isMissingTable(e)) throw e;
+  }
+}
+
+/**
  * Drop the mappings that pointed at a term being deleted.
  *
  * buildVocabulary already ignores an alias whose canonical is gone, so this

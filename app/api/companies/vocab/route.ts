@@ -11,6 +11,7 @@ import {
   insertTerm,
   deleteTerm,
   deleteAliasesTo,
+  repointAliases,
   vocabKey,
   stemKey,
   similarity,
@@ -252,6 +253,24 @@ export async function POST(req: Request) {
 
       for (const f of from) {
         await recordAlias(conn, kind, f, canonical, "manual", session.id);
+      }
+
+      // Merging two APPROVED terms has to take the losing spelling OFF the
+      // list. Rewriting the companies alone left both names approved, so the
+      // pair came straight back under "Approved values that look alike" on the
+      // next load — the merge moved every row and still looked like it had
+      // done nothing.
+      //
+      // Only values that are themselves approved terms are removed. Mapping a
+      // misspelling that was never on the list (the "Needs review" rows) has
+      // nothing to take off it.
+      for (const f of from) {
+        const loser = vocab[kind].byKey.get(vocabKey(f));
+        if (!loser || vocabKey(loser) === vocabKey(canonical)) continue;
+        await deleteTerm(conn, kind, loser);
+        // What the importer learned about reaching the losing spelling now
+        // leads to the survivor instead of to a term that no longer exists.
+        await repointAliases(conn, kind, loser, canonical);
       }
     } else if (action === "approve") {
       const vocab = await loadVocabularies(conn);
