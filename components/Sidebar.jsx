@@ -30,6 +30,7 @@ import {
   Mail,
   BookOpen,
   ClipboardCheck,
+  Trash2,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
@@ -37,6 +38,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { useOptionalAuth } from "@/components/AuthProvider";
+import { isStaff as isStaffRole } from "@/lib/roles";
 
 /**
  * Sidebar items.  An item may either be a leaf (has `href`) or a group
@@ -70,6 +72,16 @@ const ALL_ITEMS = [
   { name: "Proforma Invoices", href: "/portal/invoices", icon: FileText },
   { name: "Orders", href: "/portal/orders", icon: ClipboardCheck },
   { name: "Offer Analytics", href: "/portal/offer-analytics", icon: LineChart },
+  // Deletions waiting on a super admin. Staff only: an admin comes here to see
+  // whether what they asked to delete has been approved, a super admin to
+  // decide. Nobody else can raise one, so nobody else needs the entry.
+  {
+    name: "Delete Requests",
+    href: "/portal/platform-admin/delete-requests",
+    icon: Trash2,
+    staffOnly: true,
+    alwaysAllow: true,
+  },
   { name: "Sequences", href: "/portal/sequences", icon: Workflow, comingSoon: true },
 
   // Relationship Management
@@ -124,6 +136,10 @@ function hrefToPageKey(href) {
 function itemAllowed(item, allow) {
   // No restriction set → everything is allowed.
   if (!Array.isArray(allow)) return true;
+  // A restricted moderator still has their deletes held for approval, so they
+  // must be able to see what became of them. This entry is never part of the
+  // page allowlist.
+  if (item.alwaysAllow) return true;
   if (item.children) {
     return item.children.some((c) => itemAllowed(c, allow));
   }
@@ -137,7 +153,7 @@ export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showComingSoon, setShowComingSoon] = useState(false);
   const { user } = useOptionalAuth();
-  const isStaff = user?.role === "admin" || user?.role === "moderator";
+  const isStaff = isStaffRole(user?.role);
   // For moderators, hide sidebar entries that fall outside the admin-defined
   // allowlist. Non-moderators (admins, regular users) see everything they
   // already saw before — `page_access` is only attached on the moderator path.
