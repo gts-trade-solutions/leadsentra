@@ -31,7 +31,15 @@ function loadDotEnv(path) {
   }
 }
 
+// Dev machines keep credentials in .env.local; the deployed server uses .env.
+// Reading only one of them is how this ends up connecting as no user at all.
 loadDotEnv(resolve(process.cwd(), ".env.local"));
+loadDotEnv(resolve(process.cwd(), ".env"));
+
+if (!process.env.MYSQL_USER) {
+  console.error("No MYSQL_USER found. Run from the repo root, where .env.local or .env lives.");
+  process.exit(1);
+}
 
 const email = (process.argv[2] || "").trim().toLowerCase();
 const role = (process.argv[3] || "admin").trim().toLowerCase();
