@@ -64,9 +64,20 @@ export async function POST(req: Request) {
       );
       const owner = (ownerRows as any[])[0];
       if (owner?.user_id && owner?.email) {
+        // ON DUPLICATE KEY UPDATE, not INSERT IGNORE: if the address is
+        // already listed but was marked "corrected", IGNORE left it corrected
+        // — and loadSuppressionSet skips corrected rows, so the address stayed
+        // mailable and bounced again on every campaign. A fresh bounce is
+        // proof the correction was wrong.
         await db.execute(
-          `INSERT IGNORE INTO suppressions (user_id, type, value, reason, source)
-           VALUES (?, 'email', ?, ?, ?)`,
+          `INSERT INTO suppressions (user_id, type, value, reason, source)
+                VALUES (?, 'email', ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+                reason       = VALUES(reason),
+                source       = VALUES(source),
+                corrected    = 0,
+                corrected_at = NULL,
+                updated_at   = NOW()`,
           [
             owner.user_id,
             String(owner.email).toLowerCase(),

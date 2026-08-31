@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { checkConfigSet, isSesConfigured } from "@/lib/ses";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -128,23 +129,70 @@ export async function GET(req: Request) {
     });
   }
 
-  // ---- 3. SES Configuration Set (for bounce/complaint webhooks) ----
+  // ---- 3. SES Configuration Set (the bounce/complaint feedback loop) ----
+  //
+  // This is the single most consequential setting for repeating bounces, so it
+  // is checked against SES itself rather than trusting the env var. A config
+  // set that is named but publishes nothing looks configured and behaves
+  // exactly like no config set at all: SES emails each bounce to the sender as
+  // a MAILER-DAEMON notice, the app never records it, the address is never
+  // suppressed, and the next campaign bounces it again.
   if (!process.env.SES_CONFIG_SET) {
     findings.push({
-      level: "warn",
-      title: "SES_CONFIG_SET is not configured",
+      level: "fail",
+      title: "SES_CONFIG_SET is not configured — bounces never reach the app",
       detail:
-        "Without a SES configuration set, bounce/complaint events don't fire SNS notifications, " +
-        "so suppressions can't auto-populate. Set SES_CONFIG_SET=EmailTrackingSet in .env.local.",
-      weight: 10,
+        "With no SES configuration set, SES does not post Bounce/Complaint/Delivery events to " +
+        "/api/email/webhooks/ses. It emails each bounce to the sender instead, so bounced addresses " +
+        "are never added to Suppressions and every campaign mails them again. " +
+        "Create a configuration set with an SNS event destination (BOUNCE, COMPLAINT, DELIVERY, REJECT), " +
+        "point the SNS topic at " +
+        `${appUrl || "https://your-app"}/api/email/webhooks/ses, then set SES_CONFIG_SET to its name.`,
+      weight: 25,
+    });
+  } else if (!isSesConfigured()) {
+    findings.push({
+      level: "warn",
+      title: `SES Configuration Set: ${process.env.SES_CONFIG_SET} (unverified)`,
+      detail:
+        "The name is set but AWS credentials are missing, so we can't confirm it publishes " +
+        "bounce events. Add AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.",
+      weight: 25,
     });
   } else {
-    findings.push({
-      level: "ok",
-      title: `SES Configuration Set: ${process.env.SES_CONFIG_SET}`,
-      detail: "Outbound mail will route through this set; bounce/complaint events will fire SNS.",
-      weight: 10,
-    });
+    const health = await checkConfigSet().catch(() => null);
+    if (health?.publishesBounces) {
+      findings.push({
+        level: "ok",
+        title: `SES Configuration Set: ${health.name}`,
+        detail:
+          `Publishing ${health.eventTypes.join(", ")}. Bounces and complaints reach the webhook, ` +
+          "so failed addresses are suppressed automatically.",
+        weight: 25,
+      });
+    } else if (health?.exists) {
+      findings.push({
+        level: "fail",
+        title: `Configuration set "${health.name}" does not publish bounce events`,
+        detail:
+          (health.eventTypes.length
+            ? `It publishes ${health.eventTypes.join(", ")} but not both BOUNCE and COMPLAINT. `
+            : "It has no enabled event destination. ") +
+          "Until it does, SES emails bounces to the sender instead of the app, and bounced " +
+          "addresses are never suppressed — so the same addresses bounce on every campaign. " +
+          "Add an SNS event destination covering BOUNCE, COMPLAINT, DELIVERY and REJECT.",
+        weight: 25,
+      });
+    } else {
+      findings.push({
+        level: "fail",
+        title: `Configuration set "${process.env.SES_CONFIG_SET}" could not be read`,
+        detail:
+          (health?.error || "SES did not return it.") +
+          " Every send names this set, so if it does not exist in this region the sends fail outright.",
+        weight: 25,
+      });
+    }
   }
 
   // ---- 4. Reply-To header ----

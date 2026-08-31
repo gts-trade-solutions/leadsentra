@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { isStaff } from "@/lib/admin";
+import { emptyStats, addRow, finalizeStats, type CampaignStats } from "@/lib/campaignStats";
 
 export const dynamic = "force-dynamic";
 
@@ -13,37 +15,27 @@ export async function POST(req: Request) {
   if (!ids.length) return NextResponse.json({ metrics: {} });
 
   const placeholders = ids.map(() => "?").join(",");
+  // Ownership guard: without the JOIN any signed-in user could POST another
+  // tenant's campaign ids and read their send volume, open and bounce counts.
+  const staffBypass = isStaff(session.role);
   const [rows] = await db.execute(
-    `SELECT campaign_id, status, opens_count, clicks_count, opened_at
-       FROM campaign_recipients
-      WHERE campaign_id IN (${placeholders})`,
-    ids
+    `SELECT cr.campaign_id, cr.status, cr.opens_count, cr.clicks_count,
+            cr.opened_at, cr.clicked_at
+       FROM campaign_recipients cr
+       JOIN campaigns c ON c.id = cr.campaign_id
+      WHERE cr.campaign_id IN (${placeholders})
+        ${staffBypass ? "" : "AND c.user_id = ?"}`,
+    staffBypass ? ids : [...ids, session.id]
   );
 
-  const agg: Record<string, any> = {};
-  for (const id of ids) {
-    agg[id] = {
-      campaign_id: id,
-      recipients: 0, queued: 0, delivered: 0, bounced: 0, complained: 0,
-      opened_unique: 0, clicks_total: 0, opens_total: 0,
-    };
-  }
+  const agg: Record<string, CampaignStats> = {};
+  for (const id of ids) agg[id] = emptyStats();
   for (const r of rows as any[]) {
     const a = agg[r.campaign_id];
     if (!a) continue;
-    a.recipients++;
-    if (r.status === "queued") a.queued++;
-    // "delivered" here means "successfully handed to the provider" — sent,
-    // delivered, opened, clicked all count. Bounced/complained are failures.
-    if (["sent", "delivered", "opened", "clicked"].includes(r.status)) a.delivered++;
-    // Bounces and complaints are counted separately — SES reports them as two
-    // distinct metrics, and folding complaints into `bounced` made this number
-    // read higher than the SES console for the same campaign.
-    if (r.status === "bounced") a.bounced++;
-    if (r.status === "complained") a.complained++;
-    a.opens_total += Number(r.opens_count || 0);
-    a.clicks_total += Number(r.clicks_count || 0);
-    if (r.opened_at) a.opened_unique++;
+    addRow(a, r);
   }
+  for (const id of ids) finalizeStats(agg[id]);
+
   return NextResponse.json({ metrics: agg });
 }

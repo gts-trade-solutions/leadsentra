@@ -19,6 +19,7 @@ import Table from "@/components/Table";
 import StatCard from "@/components/StatCard";
 import WalletBadge from "@/components/WalletBadge";
 import EmptyState from "@/components/EmptyState";
+import { emptyStats, type CampaignStats } from "@/lib/campaignStats";
 
 type CampaignRow = {
   id: string;
@@ -29,16 +30,8 @@ type CampaignRow = {
   low_signal?: number | boolean;
 };
 
-interface CampaignMetric {
-  campaign_id: string;
-  recipients: number;
-  queued: number;
-  delivered: number;
-  bounced: number;
-  opened_unique: number;
-  clicks_total: number;
-  opens_total: number;
-}
+/** Shape of one entry in POST /api/campaigns/metrics — see lib/campaignStats. */
+type CampaignMetric = CampaignStats;
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
@@ -115,8 +108,12 @@ export default function CampaignsPage() {
     () =>
       Object.values(campMetrics).reduce(
         (acc, m) => {
-          acc.sent += Math.max(0, m.recipients - m.queued);
-          acc.delivered += m.delivered;
+          // "Sent" is what we actually handed to the provider. It used to be
+          // `recipients - queued`, which also swept in suppressed rows that
+          // were deliberately never sent — inflating this tile above the count
+          // in the SES console.
+          acc.sent += m.attempted;
+          acc.delivered += m.accepted;
           acc.opens += m.opens_total;
           acc.clicks += m.clicks_total;
           acc.bounced += m.bounced;
@@ -129,12 +126,8 @@ export default function CampaignsPage() {
   const activeCount = campaigns.filter((c) => c.status === "sending" || c.status === "scheduled").length;
 
   const tableData = campaigns.map((c) => {
-    const m =
-      campMetrics[c.id] ?? {
-        recipients: 0, queued: 0, delivered: 0, bounced: 0,
-        opened_unique: 0, clicks_total: 0, opens_total: 0,
-      };
-    const sentCount = Math.max(0, m.recipients - m.queued);
+    const m = campMetrics[c.id] ?? emptyStats();
+    const sentCount = m.attempted;
     // A campaign sent in Primary-inbox mode carries no pixel and no rewritten
     // links, so its opens and clicks can only ever be zero. Printing "0" reads
     // as "nobody opened it" — say that it wasn't measured instead.
@@ -151,7 +144,7 @@ export default function CampaignsPage() {
       name: <span className="font-medium text-white">{c.name}</span>,
       status: <StatusBadge status={c.status} />,
       sent: sentCount.toLocaleString("en-US"),
-      delivered: m.delivered.toLocaleString("en-US"),
+      delivered: m.accepted.toLocaleString("en-US"),
       opens: untracked ? notTracked : m.opens_total.toLocaleString("en-US"),
       clicks: untracked ? notTracked : m.clicks_total.toLocaleString("en-US"),
       bounced: m.bounced.toLocaleString("en-US"),

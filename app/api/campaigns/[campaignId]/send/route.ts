@@ -6,6 +6,7 @@ import { isStaff } from "@/lib/admin";
 import { withTracking, htmlToText, ensureEmailHtml, unsubscribeUrl } from "@/lib/emailTracking";
 import { sendEmail } from "@/lib/emailProvider";
 import { loadSuppressionSet, isSuppressed } from "@/lib/suppressions";
+import { checkEmailDeliverable, domainOf } from "@/lib/emailValidation";
 
 export const runtime = "nodejs"; // ensure NOT edge
 
@@ -238,6 +239,35 @@ export async function POST(
       continue;
     }
 
+    // Pre-send DNS check. A domain with no MX and no A record cannot receive
+    // mail from anyone, so sending is a guaranteed permanent bounce — and every
+    // permanent bounce is charged against the SES account reputation before
+    // anything can suppress it. Blocking here is what stops the same dead
+    // address bouncing on campaign after campaign.
+    //
+    // Only a definitive DNS answer blocks; a timeout returns "unknown" and the
+    // send proceeds, so a flaky resolver never eats a campaign.
+    if (!body.dryRun) {
+      const verdict = await checkEmailDeliverable(r.email);
+      if (verdict === "no-mx") {
+        const reason = `Domain ${domainOf(r.email) ?? "?"} has no MX or A record — it cannot receive email`;
+        await db.execute(
+          "UPDATE campaign_recipients SET status='failed', error_reason=?, last_event_at = NOW() WHERE id = ?",
+          [reason.slice(0, 500), r.id]
+        );
+        // Suppress so later campaigns skip it without repeating the lookup.
+        await db.execute(
+          `INSERT INTO suppressions (user_id, type, value, reason, source)
+                VALUES (?, 'email', ?, ?, 'bounce')
+           ON DUPLICATE KEY UPDATE reason = VALUES(reason), updated_at = NOW()`,
+          [campaignRow.user_id, String(r.email).toLowerCase(), reason.slice(0, 255)]
+        ).catch(() => {});
+        failed++;
+        errors.push({ id: r.id, email: r.email, error: reason });
+        continue;
+      }
+    }
+
     const token = r.tracking_token || crypto.randomUUID();
     if (!r.tracking_token) {
       await db.execute(
@@ -263,6 +293,12 @@ export async function POST(
         text: htmlToText(html),
         unsubscribeUrl: unsubscribeUrl(token, baseUrl),
         campaignId,
+        // Attached as an SES message tag so a later bounce/complaint event can
+        // be traced back to THIS recipient row even if the message id lookup
+        // misses. Without it the webhook fell back to matching on the address
+        // alone, which picks the wrong row when the same person is on two
+        // campaigns.
+        trackingToken: token,
         lowSignal,
       });
       // "sent" = accepted by the mail provider for delivery. We do NOT claim
@@ -288,14 +324,15 @@ export async function POST(
         "UPDATE campaign_recipients SET status='failed', error_reason=?, last_event_at = NOW() WHERE id = ?",
         [String(msg).slice(0, 500), r.id]
       );
-      // Add the address to the bounce/suppression list with the reason so it
-      // shows up alongside real bounces and is skipped in future campaigns.
-      // INSERT IGNORE: the unique (user_id, type, value) constraint dedupes
-      // repeats and never clobbers an existing (e.g. real-bounce) entry.
-      // NOTE: this suppresses on ANY send failure — including transient/config
-      // errors (sender-not-verified, throttling).  To re-enable such an
-      // address later, mark it "corrected" on the Suppressions page.
-      if (campaignRow.user_id && r.email) {
+      // Suppress the address only when the failure is about the ADDRESS.
+      //
+      // This used to suppress on any send failure at all. A throttle, an
+      // expired key, or an unverified sender is a problem with the sending
+      // account, not with the recipient — yet one such error mid-batch
+      // permanently blacklisted every remaining valid customer, and they then
+      // showed up under "bounced" on the tracking page. Those addresses are
+      // left alone now; the row still records the real error_reason.
+      if (campaignRow.user_id && r.email && isRecipientFault(msg)) {
         await db.execute(
           `INSERT IGNORE INTO suppressions (user_id, type, value, reason, source)
            VALUES (?, 'email', ?, ?, 'bounce')`,
@@ -354,4 +391,35 @@ export async function POST(
 
 function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+/**
+ * Is this send error the RECIPIENT's fault (so the address should be
+ * suppressed), or the sending ACCOUNT's (so it should not)?
+ *
+ * Only address-level rejections get an address blacklisted. Everything else —
+ * credentials, throttling, unverified sender, network — is retryable and must
+ * leave the recipient list untouched.
+ */
+function isRecipientFault(message: string): boolean {
+  const m = String(message || "").toLowerCase();
+
+  // Account/config problems, checked first: some of these mention the word
+  // "address" and would otherwise match the recipient patterns below.
+  const senderFault = [
+    "not verified", "email address is not verified", "identity",
+    "throttl", "maximum sending rate", "rate exceeded", "daily message quota",
+    "credential", "signature", "accessdenied", "not authorized", "expired",
+    "sending paused", "account is paused",
+    "timeout", "etimedout", "econnreset", "enotfound", "network",
+    "no email provider configured", "aws_access_key_id",
+  ];
+  if (senderFault.some((p) => m.includes(p))) return false;
+
+  const recipientFault = [
+    "recipient", "mailbox", "no such user", "user unknown",
+    "does not exist", "invalid destination", "address rejected",
+    "suppress", "blocked", "550", "553",
+  ];
+  return recipientFault.some((p) => m.includes(p));
 }

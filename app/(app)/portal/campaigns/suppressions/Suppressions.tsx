@@ -13,6 +13,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Pencil,
+  DownloadCloud,
+  AlertTriangle,
 } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
@@ -34,6 +36,26 @@ type SuppressionRow = {
 };
 
 type Summary = { total: number; emails: number; domains: number; manual: number };
+
+/** GET /api/suppressions/sync-ses — is the SES bounce feedback loop connected? */
+type SesHealth = {
+  ses_configured: boolean;
+  webhook_live: boolean;
+  config_set: {
+    name: string | null;
+    exists: boolean;
+    publishesBounces: boolean;
+    eventTypes: string[];
+    error?: string;
+  } | null;
+};
+
+type SesPreview = {
+  ses_total: number;
+  matched: number;
+  already_suppressed: number;
+  to_add: number;
+};
 
 type FilterType = "all" | "email" | "domain";
 // `corrected` is not a real `source` column value — it's a parallel pseudo-tab
@@ -72,6 +94,60 @@ export default function SuppressionsPage() {
   const [bulkReason, setBulkReason] = useState("");
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  // SES account-suppression-list import. See app/api/suppressions/sync-ses.
+  const [sesHealth, setSesHealth] = useState<SesHealth | null>(null);
+  const [sesPreview, setSesPreview] = useState<SesPreview | null>(null);
+  const [sesBusy, setSesBusy] = useState(false);
+
+  async function loadSesHealth() {
+    try {
+      const res = await fetch("/api/suppressions/sync-ses", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      if (!data) return;
+      setSesHealth(data as SesHealth);
+      setSesPreview((data as any)?.preview ?? null);
+    } catch {
+      /* the banner is additive — the page works without it */
+    }
+  }
+
+  async function syncSes() {
+    setSesBusy(true);
+    try {
+      const res = await fetch("/api/suppressions/sync-ses", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Import failed");
+      const added = Number(data?.added || 0);
+      const marked = Number(data?.recipients_marked || 0);
+      toast({
+        title:
+          added > 0
+            ? `Blocked ${added.toLocaleString()} address${added === 1 ? "" : "es"} SES had already rejected`
+            : "Nothing new to import",
+        description:
+          added > 0
+            ? `${marked.toLocaleString()} campaign recipient${marked === 1 ? "" : "s"} re-marked as bounced. These addresses will be skipped from now on.`
+            : data?.note ||
+              "Every address SES has suppressed is already blocked here.",
+      });
+      await Promise.all([load(), loadSesHealth()]);
+    } catch (e: any) {
+      toast({
+        variant: "destructive",
+        title: "Could not import from SES",
+        description: e?.message || "",
+      });
+    } finally {
+      setSesBusy(false);
+    }
+  }
 
   // Edit modal
   const [editing, setEditing] = useState<SuppressionRow | null>(null);
@@ -228,6 +304,12 @@ export default function SuppressionsPage() {
   useEffect(() => {
     setPage(1);
   }, [search, filterType, filterSource]);
+
+  // Once, on mount: is the SES bounce feedback loop actually connected?
+  useEffect(() => {
+    loadSesHealth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function parseBulk(input: string): string[] {
     return input
@@ -397,6 +479,15 @@ export default function SuppressionsPage() {
           }
         >
           <button
+            onClick={syncSes}
+            disabled={sesBusy}
+            title="Read the addresses AWS SES has already stopped delivering to, and block them here"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
+          >
+            <DownloadCloud className={`w-4 h-4 ${sesBusy ? "animate-pulse" : ""}`} />
+            {sesBusy ? "Importing…" : "Import bounces from SES"}
+          </button>
+          <button
             onClick={() => {
               setAddErr(null);
               setShowAdd(true);
@@ -407,6 +498,44 @@ export default function SuppressionsPage() {
             Add Suppression
           </button>
         </SectionHeader>
+
+        {/* The one thing an operator needs to know when the same address keeps
+            bouncing: SES is not telling the app about bounces at all. Shown
+            only when we can actually confirm the gap. */}
+        {sesHealth && sesHealth.ses_configured && !sesHealth.webhook_live && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-700/60 bg-amber-950/30 px-4 py-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-100/90 min-w-0">
+              <div className="font-medium text-amber-200">
+                SES is not reporting bounces to LeadSentra
+              </div>
+              <p className="text-xs text-amber-100/70 mt-1">
+                {sesHealth.config_set?.name
+                  ? sesHealth.config_set.exists
+                    ? `The configuration set "${sesHealth.config_set.name}" exists but does not publish BOUNCE and COMPLAINT events${
+                        sesHealth.config_set.eventTypes.length
+                          ? ` (it publishes: ${sesHealth.config_set.eventTypes.join(", ")})`
+                          : " — it has no enabled event destination"
+                      }.`
+                    : sesHealth.config_set.error
+                  : "SES_CONFIG_SET is not set on the server."}{" "}
+                Until that is fixed, SES emails each bounce to the sender as a
+                MAILER-DAEMON notice instead of posting it to the app, so bounced
+                addresses are never blocked here and every campaign mails them again.
+                Use <b>Import bounces from SES</b> to catch up in the meantime.
+              </p>
+              {sesPreview && (
+                <p className="text-xs text-amber-100/70 mt-1.5">
+                  SES currently refuses delivery to{" "}
+                  <b>{sesPreview.matched.toLocaleString()}</b> address
+                  {sesPreview.matched === 1 ? "" : "es"} you have mailed;{" "}
+                  <b>{sesPreview.to_add.toLocaleString()}</b>{" "}
+                  {sesPreview.to_add === 1 ? "is" : "are"} not blocked here yet.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Summary cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

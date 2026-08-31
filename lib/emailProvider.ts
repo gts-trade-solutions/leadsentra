@@ -19,6 +19,11 @@ type SendArgs = {
   /** Campaign id, surfaced in the Feedback-ID header so Gmail Postmaster
    *  Tools can break out reputation per-campaign.  Optional but recommended. */
   campaignId?: string;
+  /** Per-recipient tracking token.  Attached as an SES message tag so a
+   *  bounce/complaint notification can be matched back to the exact
+   *  campaign_recipients row even when the message-id lookup misses (an
+   *  older row with no stored id, or a re-send). */
+  trackingToken?: string;
   /** "Reduce promotional signals" mode: drop the Precedence: bulk /
    *  Auto-Submitted / Sender headers that self-identify the mail as bulk
    *  marketing (List-Unsubscribe + Feedback-ID are kept). Aims for Gmail's
@@ -140,7 +145,54 @@ export async function sendEmail(args: SendArgs): Promise<{ id: string | null }> 
 }
 
 // ---------- AWS SES v2 ----------
-async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments, replyTo: replyToArg }: SendArgs) {
+/**
+ * SES message tags.
+ *
+ * SES echoes these back on every event notification as `mail.tags`, which is
+ * how the SNS webhook finds the campaign_recipients row a bounce belongs to
+ * when the message-id lookup misses.  Without them that whole fallback path in
+ * app/api/email/webhooks/ses was dead code — the tags it read were never set,
+ * so an unmatched bounce fell through to a blind match on the address.
+ *
+ * SES only accepts A-Z a-z 0-9 _ - in tag names and values (max 256 chars);
+ * anything else makes the whole send fail, so values are sanitised here.
+ */
+function sesTags(args: SendArgs): { Name: string; Value: string }[] {
+  const clean = (v: string) => v.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 256);
+  const tags: { Name: string; Value: string }[] = [];
+  if (args.campaignId) tags.push({ Name: "campaign_id", Value: clean(args.campaignId) });
+  if (args.trackingToken) tags.push({ Name: "tracking_token", Value: clean(args.trackingToken) });
+  return tags;
+}
+
+/**
+ * A configuration set is what routes SES bounce/complaint/delivery events to
+ * SNS, and SNS is what calls our webhook.  With no configuration set SES falls
+ * back to *email* feedback forwarding: the bounce is mailed to the sender as a
+ * MAILER-DAEMON "Delivery Status Notification (Failure)" and the application
+ * never hears about it.  The address is then never suppressed, so the next
+ * campaign mails it again and bounces again — indefinitely.
+ *
+ * Warn loudly, once per process, so this is visible in the server log rather
+ * than only in the sender's inbox.
+ */
+let warnedNoConfigSet = false;
+function warnIfNoConfigSet() {
+  if (warnedNoConfigSet || process.env.SES_CONFIG_SET) return;
+  warnedNoConfigSet = true;
+  console.warn(
+    "⚠️ [DELIVERABILITY] SES_CONFIG_SET is not set. SES will email bounce notices " +
+    "to the sender instead of posting them to /api/email/webhooks/ses, so bounced " +
+    "addresses are never auto-suppressed and will be mailed again next campaign. " +
+    "Create a configuration set with an SNS event destination (Bounce, Complaint, " +
+    "Delivery, Reject) and set SES_CONFIG_SET to its name."
+  );
+}
+
+async function sendWithSES(args: SendArgs) {
+  const { to, subject, html, fromEmail, fromName, text, unsubscribeUrl, campaignId, lowSignal, inReplyTo, references, attachments, replyTo: replyToArg } = args;
+  warnIfNoConfigSet();
+  const emailTags = sesTags(args);
   const { SESv2Client, SendEmailCommand } = await import("@aws-sdk/client-sesv2");
   const ses = new SESv2Client({
     region: process.env.SES_REGION || process.env.AWS_REGION || "us-east-1",
@@ -265,6 +317,7 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
       new SendEmailCommand({
         Content: { Raw: { Data: raw } },
         ConfigurationSetName: process.env.SES_CONFIG_SET || undefined,
+        EmailTags: emailTags.length ? emailTags : undefined,
       })
     );
     return { id: resp.MessageId ?? null };
@@ -276,6 +329,7 @@ async function sendWithSES({ to, subject, html, fromEmail, fromName, text, unsub
       Destination: { ToAddresses: toList(to) },
       Content: { Simple: { Subject: { Data: subject }, Body: body } },
       ConfigurationSetName: process.env.SES_CONFIG_SET || undefined,
+      EmailTags: emailTags.length ? emailTags : undefined,
     })
   );
   return { id: resp.MessageId ?? null };

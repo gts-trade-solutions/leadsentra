@@ -21,6 +21,7 @@ import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import StatCard from "@/components/StatCard";
 import { toast } from "@/hooks/use-toast";
+import { ACCEPTED_STATUSES, statsFromRows } from "@/lib/campaignStats";
 
 type RecipientRow = {
   id: string;
@@ -67,6 +68,9 @@ type Filter =
   | "bounced" | "complained" | "not_opened" | "suppressed" | "failed";
 
 const PER_PAGE = 100;
+
+/** Statuses that count as "went out and has not failed since". */
+const ACCEPTED: readonly string[] = ACCEPTED_STATUSES;
 
 export default function TrackingPage({ campaignId }: { campaignId: string }) {
   const [campaign, setCampaign] = useState<CampaignSummary | null>(null);
@@ -149,38 +153,34 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh, campaignId]);
 
-  const stats = useMemo(() => {
-    let total = rows.length;
-    let delivered = 0, bounced = 0, complained = 0, openedUnique = 0;
-    let opens = 0, clicks = 0, suppressed = 0, queued = 0, sent = 0, failed = 0;
-    for (const r of rows) {
-      if (r.status === "delivered") delivered++;
-      if (r.status === "bounced") bounced++;
-      if (r.status === "complained") complained++;
-      if (r.status === "suppressed") suppressed++;
-      if (r.status === "queued") queued++;
-      if (r.status === "sent") sent++;
-      if (r.status === "failed") failed++;
-      if (r.opened_at) openedUnique++;
-      opens += r.opens_count || 0;
-      clicks += r.clicks_count || 0;
-    }
-    return { total, delivered, bounced, complained, openedUnique, opens, clicks, suppressed, queued, sent, failed };
-  }, [rows]);
+  // Same aggregator the campaign list, the progress widget and the global
+  // email-status page use.  This page used to count "Delivered" as rows whose
+  // status is literally 'delivered' — a state only ever reached when SES posts
+  // a Delivery event.  With no SES configuration set wired up nothing ever
+  // reaches it, so this card read 0 on campaigns the list showed as fully
+  // delivered, and the "Delivered" filter returned an empty table.
+  const stats = useMemo(() => statsFromRows(rows), [rows]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((r) => {
       const m =
         filter === "all" ||
-        (filter === "delivered" && r.status === "delivered") ||
-        (filter === "opened" && !!r.opened_at) ||
-        (filter === "clicked" && !!r.clicked_at) ||
+        // "Delivered" means accepted by the provider and not since failed —
+        // matching status === 'delivered' alone hid every recipient who has
+        // since opened or clicked, plus everyone still awaiting a Delivery
+        // event that only arrives when SES webhooks are configured.
+        (filter === "delivered" && ACCEPTED.includes(r.status)) ||
+        (filter === "opened" && (!!r.opened_at || (r.opens_count || 0) > 0)) ||
+        (filter === "clicked" && (!!r.clicked_at || (r.clicks_count || 0) > 0)) ||
         (filter === "bounced" && r.status === "bounced") ||
         (filter === "complained" && r.status === "complained") ||
         (filter === "suppressed" && r.status === "suppressed") ||
         (filter === "failed" && r.status === "failed") ||
-        (filter === "not_opened" && !r.opened_at && (r.status === "sent" || r.status === "delivered"));
+        (filter === "not_opened" &&
+          !r.opened_at &&
+          (r.opens_count || 0) === 0 &&
+          ACCEPTED.includes(r.status));
       if (!m) return false;
       if (!q) return true;
       const name = (r.contact_name || "").toLowerCase();
@@ -243,17 +243,45 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
 
         {/* Stat cards */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-          <StatCard title="Recipients"      value={String(stats.total)}        icon={Mail} />
-          <StatCard title="Delivered"       value={String(stats.delivered)}    icon={CheckCircle2} />
-          <StatCard title="Opened (unique)" value={String(stats.openedUnique)} icon={Eye} />
-          <StatCard title="Opens"           value={String(stats.opens)}        icon={Eye} />
-          <StatCard title="Clicks"          value={String(stats.clicks)}       icon={MousePointerClick} />
+          <StatCard title="Recipients"      value={String(stats.recipients)}      icon={Mail} />
+          <StatCard title="Delivered"       value={String(stats.accepted)}        icon={CheckCircle2} />
+          <StatCard title="Opened (unique)" value={String(stats.opened_unique)}   icon={Eye} />
+          <StatCard title="Opens"           value={String(stats.opens_total)}     icon={Eye} />
+          <StatCard title="Clicks"          value={String(stats.clicks_total)}    icon={MousePointerClick} />
           <StatCard
             title="Bounced / Compl."
             value={String(stats.bounced + stats.complained)}
             icon={AlertTriangle}
           />
         </div>
+
+        {/* The provider took the mail but has never told us what happened to
+            it.  Without this banner the page just shows zero bounces and zero
+            confirmed deliveries, which reads as "everything is fine" when in
+            fact the feedback loop is disconnected and bounced addresses are
+            never suppressed — so the same dead address is mailed again on the
+            next campaign. */}
+        {stats.delivery_feedback_missing && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-700/60 bg-amber-950/30 px-4 py-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-100/90">
+              <div className="font-medium text-amber-200">
+                No delivery or bounce feedback received for this campaign
+              </div>
+              <p className="text-xs text-amber-100/70 mt-1">
+                {stats.accepted.toLocaleString()} message
+                {stats.accepted === 1 ? " was" : "s were"} accepted by the provider, but
+                it has never reported a delivery, bounce, or complaint back to LeadSentra.
+                Until that feedback arrives, bounced addresses are not added to your
+                suppression list and will be mailed again by the next campaign.{" "}
+                <Link href="/portal/campaigns/suppressions" className="underline hover:text-amber-100">
+                  Import bounces from SES
+                </Link>{" "}
+                to catch up, and connect the SES event webhook to keep it current.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* What you sent — the message itself, next to who received it. The
             table shows opens and clicks; this is the thing you actually need
@@ -378,7 +406,12 @@ export default function TrackingPage({ campaignId }: { campaignId: string }) {
 
         {/* Secondary stats row */}
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 text-xs text-gray-400 flex flex-wrap gap-x-6 gap-y-1">
-          <span><b className="text-gray-200">{stats.sent}</b> sent</span>
+          <span><b className="text-gray-200">{stats.attempted}</b> sent</span>
+          <span
+            title="Confirmed by the provider's delivery notification. Stays at 0 until the SES event webhook is connected."
+          >
+            <b className="text-gray-200">{stats.confirmed}</b> delivery-confirmed
+          </span>
           <span><b className="text-gray-200">{stats.queued}</b> queued</span>
           <span>
             <AlertTriangle className="w-3 h-3 inline -mt-0.5 mr-1 text-rose-300" />

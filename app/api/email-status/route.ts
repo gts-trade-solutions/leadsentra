@@ -2,14 +2,12 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
+import { ALL_STATUSES, statsFromCounts } from "@/lib/campaignStats";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const STATUS_VALUES = new Set([
-  "queued", "sent", "delivered", "opened", "clicked",
-  "bounced", "complained", "suppressed", "failed",
-]);
+const STATUS_VALUES = new Set<string>(ALL_STATUSES);
 
 /**
  * GET /api/email-status
@@ -106,8 +104,10 @@ export async function GET(req: Request) {
   }
   const [countRows] = await db.query(
     `SELECT cr.status, COUNT(*) AS n,
-            SUM(CASE WHEN cr.opens_count > 0 THEN 1 ELSE 0 END) AS opened_unique,
-            SUM(CASE WHEN cr.clicks_count > 0 THEN 1 ELSE 0 END) AS clicked_unique
+            SUM(CASE WHEN cr.opens_count  > 0 OR cr.opened_at  IS NOT NULL THEN 1 ELSE 0 END) AS opened_unique,
+            SUM(CASE WHEN cr.clicks_count > 0 OR cr.clicked_at IS NOT NULL THEN 1 ELSE 0 END) AS clicked_unique,
+            COALESCE(SUM(cr.opens_count), 0)  AS opens_total,
+            COALESCE(SUM(cr.clicks_count), 0) AS clicks_total
        FROM campaign_recipients cr
        JOIN campaigns c ON c.id = cr.campaign_id
        LEFT JOIN contacts co ON co.id = cr.contact_id
@@ -119,23 +119,27 @@ export async function GET(req: Request) {
   const counts: Record<string, number> = {};
   let openedUnique = 0;
   let clickedUnique = 0;
+  let opensTotal = 0;
+  let clicksTotal = 0;
   for (const r of countRows as any[]) {
     counts[r.status] = Number(r.n || 0);
     openedUnique += Number(r.opened_unique || 0);
     clickedUnique += Number(r.clicked_unique || 0);
+    opensTotal += Number(r.opens_total || 0);
+    clicksTotal += Number(r.clicks_total || 0);
   }
 
-  const sent =
-    (counts.sent || 0) +
-    (counts.delivered || 0) +
-    (counts.opened || 0) +
-    (counts.clicked || 0) +
-    (counts.bounced || 0) +
-    (counts.complained || 0);
-  const suppressed = counts.suppressed || 0;
-  const queued = counts.queued || 0;
-  const bounced = counts.bounced || 0;
-  const complained = counts.complained || 0;
+  // Every number below comes from lib/campaignStats, the same aggregator the
+  // campaign list, the tracking page and the progress widget use.  This page
+  // used to report `delivered` as "rows whose status is literally 'delivered'",
+  // which is only ever non-zero once SES posts Delivery events — so it read 0
+  // while the campaign list, using a wider definition, showed thousands.
+  const stats = statsFromCounts(counts, {
+    opened_unique: openedUnique,
+    clicked_unique: clickedUnique,
+    opens_total: opensTotal,
+    clicks_total: clicksTotal,
+  });
 
   return NextResponse.json({
     rows,
@@ -143,22 +147,35 @@ export async function GET(req: Request) {
     limit,
     total,
     counts,
+    stats,
     summary: {
-      sent,
-      delivered: counts.delivered || 0,
-      opened_unique: openedUnique,
-      clicked_unique: clickedUnique,
-      bounced,
-      complained,
-      suppressed,
-      queued,
-      open_rate: sent > 0 ? Math.round((openedUnique / sent) * 100) : 0,
-      click_rate: sent > 0 ? Math.round((clickedUnique / sent) * 100) : 0,
+      // Handed to the provider, bounces included — the denominator for rates.
+      sent: stats.attempted,
+      // Accepted and not since failed. What a user means by "delivered".
+      delivered: stats.accepted,
+      // The stricter subset the provider explicitly confirmed.
+      confirmed: stats.confirmed,
+      in_flight: stats.in_flight,
+      opened_unique: stats.opened_unique,
+      clicked_unique: stats.clicked_unique,
+      opens_total: stats.opens_total,
+      clicks_total: stats.clicks_total,
+      bounced: stats.bounced,
+      complained: stats.complained,
+      suppressed: stats.suppressed,
+      failed: stats.failed,
+      queued: stats.queued,
+      open_rate: stats.open_rate,
+      click_rate: stats.click_rate,
       // Bounce rate is bounces / sends, matching how SES reports it. Complaints
       // are a separate SES metric — including them here made this read higher
       // than the SES console.
-      bounce_rate: sent > 0 ? Math.round((bounced / sent) * 1000) / 10 : 0,
-      complaint_rate: sent > 0 ? Math.round((complained / sent) * 1000) / 10 : 0,
+      bounce_rate: stats.bounce_rate,
+      complaint_rate: stats.complaint_rate,
+      // Mail went out but nothing has ever come back — bounce/delivery
+      // notifications are not reaching the app.  The page surfaces this instead
+      // of showing a silent row of zeroes.
+      delivery_feedback_missing: stats.delivery_feedback_missing,
     },
   });
 }

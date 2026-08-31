@@ -45,14 +45,22 @@ type Row = {
 };
 
 type Summary = {
+  /** Handed to the provider, bounces included — the denominator for the rates. */
   sent: number;
+  /** Accepted by the provider and not since failed. */
   delivered: number;
+  /** Subset the provider explicitly confirmed as delivered (needs webhooks). */
+  confirmed: number;
+  in_flight: number;
   opened_unique: number;
   clicked_unique: number;
   bounced: number;
   complained: number;
   suppressed: number;
+  failed: number;
   queued: number;
+  /** Mail went out but no delivery/bounce feedback has ever come back. */
+  delivery_feedback_missing: boolean;
   open_rate: number;
   click_rate: number;
   /** Bounces / sends, to one decimal — same definition as the SES console. */
@@ -341,7 +349,7 @@ export default function Tracking() {
           <KPI
             label="Sent"
             value={sentTotal.toLocaleString("en-US")}
-            sub={`${(summary?.delivered ?? 0).toLocaleString()} delivered`}
+            sub={`${(summary?.delivered ?? 0).toLocaleString()} delivered · ${(summary?.confirmed ?? 0).toLocaleString()} confirmed`}
             icon={Send}
           />
           <KPI
@@ -372,6 +380,33 @@ export default function Tracking() {
             valueClass={(summary?.bounced ?? 0) > 0 ? "text-red-300" : "text-gray-300"}
           />
         </div>
+
+        {/* A 0% bounce rate is only good news if bounces can actually reach us.
+            When the provider has never reported a single delivery, bounce or
+            complaint, these tiles are measuring nothing — and every address
+            that bounced is still on the list, ready to bounce again. */}
+        {summary?.delivery_feedback_missing && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-700/60 bg-amber-950/30 px-4 py-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-100/90">
+              <div className="font-medium text-amber-200">
+                Bounce and delivery feedback is not reaching LeadSentra
+              </div>
+              <p className="text-xs text-amber-100/70 mt-1">
+                {sentTotal.toLocaleString()} messages were accepted by the provider, but
+                not one delivery, bounce, or complaint has been reported back. The 0%
+                bounce rate above is therefore &ldquo;nothing measured&rdquo;, not
+                &ldquo;nothing bounced&rdquo; — which is why the same dead addresses keep
+                bouncing on every campaign. Open{" "}
+                <Link href="/portal/campaigns/suppressions" className="underline hover:text-amber-100">
+                  Suppressions → Import bounces from SES
+                </Link>{" "}
+                to pull the addresses SES has already rejected, then connect the SES
+                event webhook so it stays current.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Filter card */}
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-4 space-y-3">
