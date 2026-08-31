@@ -165,7 +165,15 @@ export async function POST() {
               cr.last_event_at = NOW()
         WHERE c.user_id = ?
           AND LOWER(cr.email) IN (${ph})
-          AND cr.status IN ('sent', 'delivered', 'opened', 'clicked')`,
+          AND cr.status IN ('sent', 'delivered', 'opened', 'clicked')
+          -- Never overwrite proof of delivery. SES suppression is a statement
+          -- about the address NOW; a send that was opened or clicked was
+          -- demonstrably received at the time, and rewriting it to 'bounced'
+          -- would erase real engagement and understate past campaigns.
+          AND cr.opened_at IS NULL
+          AND cr.clicked_at IS NULL
+          AND cr.opens_count = 0
+          AND cr.clicks_count = 0`,
       [session.id, ...chunk]
     );
     recipientsMarked += Number((res as any)?.affectedRows || 0);
