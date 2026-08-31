@@ -6,9 +6,41 @@
  */
 
 import { db } from "./db";
+import { cleanEmail } from "./validate";
 
 /** Same permissive check the upload parser uses — SES is the real authority. */
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;.]+\.[^\s@,;]{2,}$/;
+
+/**
+ * Collect the mailable addresses out of a company's inbox columns.
+ *
+ * This is the last gate before an address becomes a campaign recipient, and
+ * for company inboxes it is the ONLY gate — these columns are populated by the
+ * companies importer and by hand, so tightening the contacts importer did
+ * nothing for them.
+ *
+ * It used to be a shape check (EMAIL_RE) and nothing more, which let through
+ * exactly the addresses that then bounced on every campaign:
+ *
+ *   %20admin@raixen.com                            obfuscation, never decoded
+ *   yourname@business.com                          template text off a web page
+ *   bde9d296c91c4096b504cee430d9a067@ccsipro.com   anti-scraping token
+ *
+ * cleanEmail decodes the first (it is a real address wearing a disguise, and
+ * recovering it here means the campaign reaches a company it would otherwise
+ * have missed) and rejects the other two, which can only ever hard-bounce.
+ *
+ * Anything cleanEmail cannot make sense of is skipped rather than corrected:
+ * the stored value is left for a human, it just does not get mailed.
+ */
+function addMailable(into: Set<string>, values: unknown[]): void {
+  for (const v of values) {
+    const raw = String(v || "").trim();
+    if (!raw) continue;
+    const cleaned = cleanEmail(raw);
+    if (cleaned.value && EMAIL_RE.test(cleaned.value)) into.add(cleaned.value);
+  }
+}
 
 /**
  * The general inboxes of the given companies — info@, sales@, and whatever
@@ -37,10 +69,7 @@ export async function companyInboxes(companyIds: string[]): Promise<string[]> {
       slice
     );
     for (const r of rows as any[]) {
-      for (const v of [r.email_general, r.email_general_2, r.email_general_3]) {
-        const e = String(v || "").trim().toLowerCase();
-        if (e && EMAIL_RE.test(e)) found.add(e);
-      }
+      addMailable(found, [r.email_general, r.email_general_2, r.email_general_3]);
     }
   }
   return Array.from(found);
@@ -124,10 +153,7 @@ export async function companyInboxesByFilter(opts: {
 
   const found = new Set<string>();
   for (const r of rows as any[]) {
-    for (const v of [r.email_general, r.email_general_2, r.email_general_3]) {
-      const e = String(v || "").trim().toLowerCase();
-      if (e && EMAIL_RE.test(e)) found.add(e);
-    }
+    addMailable(found, [r.email_general, r.email_general_2, r.email_general_3]);
   }
   return Array.from(found);
 }
@@ -188,7 +214,12 @@ export function normalizeUploadedEmails(input: any): string[] {
   const out: string[] = [];
   for (const raw of input) {
     if (typeof raw !== "string") continue;
-    const value = raw.trim().toLowerCase();
+    // Same treatment as the company inboxes: a pasted or uploaded list is the
+    // other way junk reaches a campaign, and it arrives straight off the same
+    // scraped spreadsheets. cleanEmail recovers an obfuscated address and drops
+    // template text and anti-scraping tokens, which a shape check accepts.
+    const cleaned = cleanEmail(raw);
+    const value = cleaned.value;
     if (!value || !EMAIL_RE.test(value) || seen.has(value)) continue;
     seen.add(value);
     out.push(value);
