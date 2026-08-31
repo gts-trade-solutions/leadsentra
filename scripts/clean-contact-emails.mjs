@@ -125,6 +125,8 @@ function cleanEmail(value) {
   if (/^\.|\.$|\.\./.test(local) || /^\.|\.$|\.\.|^-|-$/.test(domain)) {
     return bad("Invalid email format");
   }
+  // Punctuation alone is never a mailbox: ".+@163.com" strips to "+@163.com".
+  if (!/[a-z0-9]/.test(local)) return bad("Invalid email format");
   const tld = domain.slice(domain.lastIndexOf(".") + 1);
   if (!/^[a-z]{2,}$/.test(tld)) return bad("Invalid email domain");
   if (RESERVED_TLDS.has(tld)) return bad("Reserved domain that cannot receive mail");

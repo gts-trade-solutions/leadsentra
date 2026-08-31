@@ -190,6 +190,11 @@ export function cleanEmail(value?: string | null): CleanResult {
   if (/^\.|\.$|\.\./.test(local) || /^\.|\.$|\.\.|^-|-$/.test(domain)) {
     return invalid("Invalid email format");
   }
+  // The local part must contain something nameable. Punctuation alone is never
+  // a mailbox, and stripping leading junk can leave exactly that: ".+@163.com"
+  // decoded to "+@163.com", which passes every check above and would have been
+  // written back as a "recovered" address and then mailed.
+  if (!/[a-z0-9]/.test(local)) return invalid("Invalid email format");
   // The TLD must be letters — rules out "user@host.123" and bare hostnames.
   const tld = domain.slice(domain.lastIndexOf(".") + 1);
   if (!/^[a-z]{2,}$/.test(tld)) return invalid("Invalid email domain");
