@@ -71,9 +71,15 @@ const ses = new SESv2Client({
 console.log("Reading the SES account suppression list…");
 const suppressed = new Map(); // email -> { reason, lastUpdate }
 let nextToken;
+let page = 0;
 do {
-  const res = await ses.send(
-    new ListSuppressedDestinationsCommand({ PageSize: 1000, NextToken: nextToken })
+  // ListSuppressedDestinations allows roughly one call per second. Paging flat
+  // out returns "Rate exceeded" partway through, and a partial import is the
+  // worst outcome: the addresses that never came back stay mailable and keep
+  // bouncing, while the run reports success.
+  if (page++ > 0) await sleep(1100);
+  const res = await withThrottleRetry(() =>
+    ses.send(new ListSuppressedDestinationsCommand({ PageSize: 1000, NextToken: nextToken }))
   );
   for (const d of res.SuppressedDestinationSummaries ?? []) {
     if (!d?.EmailAddress) continue;
@@ -83,7 +89,9 @@ do {
     });
   }
   nextToken = res.NextToken;
+  if (nextToken) process.stdout.write(`\r  ${suppressed.size} read…`);
 } while (nextToken);
+process.stdout.write("\r");
 
 console.log(`SES is refusing delivery to ${suppressed.size} address(es).\n`);
 if (suppressed.size === 0) process.exit(0);
@@ -221,4 +229,32 @@ function chunks(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isThrottle(e) {
+  const name = String(e?.name || e?.Code || "");
+  return (
+    name === "TooManyRequestsException" ||
+    name === "ThrottlingException" ||
+    name === "LimitExceededException" ||
+    /rate exceeded|throttl/i.test(String(e?.message || ""))
+  );
+}
+
+/** Retry a throttled SES call with exponential backoff; rethrow anything else. */
+async function withThrottleRetry(fn, attempts = 6) {
+  let delay = 1000;
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= attempts - 1 || !isThrottle(e)) throw e;
+      await sleep(delay);
+      delay = Math.min(delay * 2, 15000);
+    }
+  }
 }

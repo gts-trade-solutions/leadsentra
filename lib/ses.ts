@@ -88,12 +88,21 @@ export async function listSuppressedDestinations(
   const maxPages = opts.maxPages ?? 200; // 200 x 1000 = 200k addresses
 
   for (let page = 0; page < maxPages; page++) {
-    const res: any = await client.send(
-      new ListSuppressedDestinationsCommand({
-        Reasons: opts.reasons,
-        PageSize: 1000,
-        NextToken: nextToken,
-      })
+    // ListSuppressedDestinations is rate limited to roughly one call per
+    // second. Paging as fast as the loop allows returns "Rate exceeded" partway
+    // through, and a partial list is worse than a slow one here: the addresses
+    // that never came back are exactly the ones that stay mailable and keep
+    // bouncing. Pace the calls and retry the throttle.
+    if (page > 0) await sleep(1100);
+
+    const res: any = await withThrottleRetry(() =>
+      client.send(
+        new ListSuppressedDestinationsCommand({
+          Reasons: opts.reasons,
+          PageSize: 1000,
+          NextToken: nextToken,
+        })
+      )
     );
     for (const d of res.SuppressedDestinationSummaries ?? []) {
       if (!d?.EmailAddress) continue;
@@ -107,6 +116,36 @@ export async function listSuppressedDestinations(
     if (!nextToken) break;
   }
   return out;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Is this the SES throttle, under any of the names it arrives with? */
+function isThrottle(e: any): boolean {
+  const name = String(e?.name || e?.Code || "");
+  const msg = String(e?.message || "");
+  return (
+    name === "TooManyRequestsException" ||
+    name === "ThrottlingException" ||
+    name === "LimitExceededException" ||
+    /rate exceeded|throttl/i.test(msg)
+  );
+}
+
+/** Retry a throttled SES call with exponential backoff; rethrow anything else. */
+async function withThrottleRetry<T>(fn: () => Promise<T>, attempts = 6): Promise<T> {
+  let delay = 1000;
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= attempts - 1 || !isThrottle(e)) throw e;
+      await sleep(delay);
+      delay = Math.min(delay * 2, 15000);
+    }
+  }
 }
 
 export type ConfigSetHealth = {
