@@ -217,11 +217,26 @@ console.log(
     ? "\nDry run — nothing was written."
     : `\nDone. ${grandTotal} address(es) blocked, ${grandMarked} recipient row(s) corrected.`
 );
-console.log(
-  "\nThis is a catch-up, not a fix. Set SES_CONFIG_SET to a configuration set with an\n" +
-  "SNS event destination (BOUNCE, COMPLAINT, DELIVERY, REJECT) pointing at\n" +
-  "<APP_URL>/api/email/webhooks/ses, or the same gap reopens with the next bounce."
-);
+// This is a catch-up, never the fix. Say precisely which part is still missing
+// rather than repeating generic setup advice at someone who has already done
+// it — the previous wording told operators to set SES_CONFIG_SET even when it
+// was set correctly and the real break was downstream in SNS.
+const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "<APP_URL>";
+console.log("\nThis is a catch-up, not a fix — it only covers bounces that already happened.");
+if (!process.env.SES_CONFIG_SET) {
+  console.log(
+    "SES_CONFIG_SET is not set, so SES is not publishing bounce events at all.\n" +
+    "Create a configuration set with an SNS event destination (BOUNCE, COMPLAINT,\n" +
+    `DELIVERY, REJECT) pointing at ${appUrl}/api/email/webhooks/ses.`
+  );
+} else {
+  console.log(
+    `SES_CONFIG_SET is "${process.env.SES_CONFIG_SET}". If bounces still are not being\n` +
+    "recorded, the break is downstream: the SNS topic needs a CONFIRMED https\n" +
+    `subscription to ${appUrl}/api/email/webhooks/ses.\n` +
+    "Run  node scripts/diagnose-bounces.mjs  — section 2 checks exactly that."
+  );
+}
 
 await conn.end();
 
