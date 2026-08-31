@@ -3,8 +3,7 @@ import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
-import { isEmailShape } from "@/lib/suppressions";
-import { cleanPhone, cleanUrl } from "@/lib/validate";
+import { cleanEmail, cleanPhone, cleanUrl } from "@/lib/validate";
 import { accessibleCompanyFilter } from "@/lib/memberships";
 
 export const dynamic = "force-dynamic";
@@ -18,10 +17,16 @@ export async function POST(req: Request) {
   // Validate email format if provided.  Empty/null is allowed (some contacts
   // are added before their email is known) — but a non-empty value must be
   // a real-looking address; otherwise it silently breaks future campaign sends.
-  const emailIn = body.email ? String(body.email).trim().toLowerCase() : null;
-  if (emailIn && !isEmailShape(emailIn)) {
-    return NextResponse.json({ error: "Invalid email format" }, { status: 400 });
+  //
+  // cleanEmail also decodes an address pasted straight off a web page
+  // ("info&commat;x.com", "%20admin@x.com") and rejects template text such as
+  // "yourname@business.com", which passes a plain format check but can only
+  // ever hard-bounce. See lib/validate.ts.
+  const emailClean = cleanEmail(body.email);
+  if (emailClean.error) {
+    return NextResponse.json({ error: emailClean.error }, { status: 400 });
   }
+  const emailIn = emailClean.value;
 
   // Phone and social URLs: placeholders ("not provided", "n/a", …) are
   // silently stored as NULL; genuinely malformed values are rejected so the

@@ -3,7 +3,7 @@ import { isAdmin } from "@/lib/admin";
 import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
-import { cleanPhone, cleanUrl, type CleanResult, type UrlPlatform } from "@/lib/validate";
+import { cleanEmail, cleanPhone, cleanUrl, type CleanResult, type UrlPlatform } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -46,9 +46,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     facebook_url: "facebook_url",
     instagram_url: "instagram_url",
   };
-  // Phone / social URL fields go through the shared cleaner: placeholder
-  // junk ("not provided", "n/a", …) saves as NULL, malformed values 400.
+  // Email / phone / social URL fields go through the shared cleaner:
+  // placeholder junk ("not provided", "n/a", …) saves as NULL, malformed
+  // values 400.  Email was missing from this map, so the edit modal was the
+  // one write path that could still store an unmailable address after the
+  // import and the add form had both been tightened.
   const cleaners: Record<string, (v: any) => CleanResult> = {
+    email: (v) => cleanEmail(v),
     phone: (v) => cleanPhone(v),
     linkedin_url: (v) => cleanUrl(v, "linkedin" as UrlPlatform, "LinkedIn URL"),
     facebook_url: (v) => cleanUrl(v, "facebook" as UrlPlatform, "Facebook URL"),

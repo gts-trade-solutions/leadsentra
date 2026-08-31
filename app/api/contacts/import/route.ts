@@ -4,8 +4,7 @@ import Papa from "papaparse";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { isStaff } from "@/lib/admin";
-import { isEmailShape } from "@/lib/suppressions";
-import { cleanPhone, cleanUrl } from "@/lib/validate";
+import { cleanEmail, cleanPhone, cleanUrl } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -138,14 +137,24 @@ export async function POST(req: Request) {
 
       // Email is optional. Empty rows just get a NULL email; the user can
       // fill it in later via the Edit modal. Only flag rows where the
-      // email is present but malformed (someone typed garbage in the
-      // column) — that's a real CSV typo worth surfacing.
-      const email = row.email ? row.email.trim().toLowerCase() : null;
-      if (email && !isEmailShape(email)) {
+      // email is present but cannot be an address — a real CSV typo worth
+      // surfacing.
+      //
+      // cleanEmail replaces a bare isEmailShape check that let two kinds of
+      // junk straight through to SES:
+      //   - obfuscated addresses ("%20admin@x.com", "info&commat;x.com") were
+      //     stored with the encoding intact, so they could never be delivered
+      //   - template text ("yourname@business.com") and Cloudflare
+      //     anti-scraping tokens looked perfectly well-formed
+      // Every one was a guaranteed hard bounce charged to the sending domain's
+      // reputation. cleanEmail decodes the first kind and rejects the second.
+      const emailClean = cleanEmail(row.email);
+      if (emailClean.error) {
         failed++;
-        errors.push({ row: i + 2, error: `Invalid email format: ${email}` });
+        errors.push({ row: i + 2, error: emailClean.error });
         continue;
       }
+      const email = emailClean.value;
 
       // Phone and social URLs: placeholder junk ("not provided", "n/a", "-",
       // …) silently becomes NULL — lead lists are full of it and it used to

@@ -96,6 +96,118 @@ export function decodeEmail(value?: string | null): string | null {
 export type CleanResult = { value: string | null; error?: string };
 
 /**
+ * Local parts that are template text, not a person.
+ *
+ * These come off "contact us" pages where the address shown is an example the
+ * site owner never replaced. Every one is a guaranteed hard bounce, and a hard
+ * bounce is charged against the sending domain's reputation before anything
+ * can suppress it — so they must be stopped at import, not after.
+ *
+ * Deliberately narrow. Ambiguous local parts that are often real — name, mail,
+ * user, test, abc, demo, info — are NOT listed: losing a real lead costs more
+ * than one bounce. Only wording that cannot plausibly be a mailbox is here.
+ */
+const PLACEHOLDER_LOCALS = new Set([
+  "yourname", "your-name", "your_name", "your.name",
+  "youremail", "your-email", "your_email", "your.email",
+  "yourmail", "youraddress", "enteryouremail", "emailaddress",
+  "firstname", "lastname", "firstname.lastname", "first.last",
+  "firstname_lastname", "first_last",
+  "john.doe", "johndoe", "jane.doe", "janedoe",
+  "example", "sample", "placeholder", "dummy",
+  "asdf", "qwerty", "xxx", "xxxx", "aaa",
+]);
+
+/**
+ * Domains that can never receive mail.
+ *
+ * RFC 2606 / RFC 6761 reserve example.* and the .test/.invalid/.localhost TLDs
+ * precisely so they can be used in documentation, which is exactly how they end
+ * up in a scraped lead list. The rest are template wording.
+ *
+ * Note what is NOT here: business.com, email.com, mail.com and domain-like
+ * names that belong to real companies with real staff. "yourname@business.com"
+ * is caught by its local part instead, which costs nothing when the domain is
+ * genuine.
+ */
+const PLACEHOLDER_DOMAINS = new Set([
+  "example.com", "example.net", "example.org", "example.edu",
+  "domain.com", "domainname.com",
+  "yourdomain.com", "your-domain.com",
+  "yourcompany.com", "your-company.com", "mycompany.com", "companyname.com",
+  "yourwebsite.com", "yoursite.com", "yourbusiness.com",
+]);
+
+/** Reserved TLDs — nothing behind them accepts mail, by standard. */
+const RESERVED_TLDS = new Set(["test", "invalid", "localhost", "example", "local"]);
+
+/**
+ * Basic address shape. Defined here rather than imported from lib/suppressions
+ * so this module stays free of any database dependency — it is used in request
+ * validation paths that must not open a connection.
+ */
+const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Validate and normalise an email address from imported or user-typed data.
+ *
+ * Runs decodeEmail first, so an address the source site obfuscated
+ * ("%20admin@x.com", "info&commat;x.com") is recovered rather than rejected —
+ * those are real addresses wearing a disguise. What survives decoding is then
+ * held to a real format check plus the placeholder rules above.
+ *
+ * Empty and placeholder input returns { value: null } with no error: a contact
+ * without an email is allowed. Input that looks like it was MEANT to be an
+ * address but cannot be one returns an error so the operator sees which row
+ * was dropped and why.
+ */
+export function cleanEmail(value?: string | null): CleanResult {
+  if (value === undefined || value === null) return { value: null };
+  const original = String(value).trim();
+  if (!original) return { value: null };
+  // "n/a", "none", "-" in the email column: absence, not an error.
+  if (isPlaceholder(original)) return { value: null };
+
+  const decoded = (decodeEmail(original) || "").toLowerCase();
+  if (!decoded) return { value: null };
+  if (isPlaceholder(decoded)) return { value: null };
+
+  const invalid = (why: string): CleanResult => ({
+    value: null,
+    error: `${why}: "${original}"`,
+  });
+
+  // Exactly one @, with something either side.
+  const at = decoded.indexOf("@");
+  if (at < 1 || at !== decoded.lastIndexOf("@") || at === decoded.length - 1) {
+    return invalid("Invalid email format");
+  }
+  const local = decoded.slice(0, at);
+  const domain = decoded.slice(at + 1);
+
+  if (!EMAIL_SHAPE_RE.test(decoded)) return invalid("Invalid email format");
+  // A dot cannot lead, trail, or double up on either side of the @.
+  if (/^\.|\.$|\.\./.test(local) || /^\.|\.$|\.\.|^-|-$/.test(domain)) {
+    return invalid("Invalid email format");
+  }
+  // The TLD must be letters — rules out "user@host.123" and bare hostnames.
+  const tld = domain.slice(domain.lastIndexOf(".") + 1);
+  if (!/^[a-z]{2,}$/.test(tld)) return invalid("Invalid email domain");
+  if (RESERVED_TLDS.has(tld)) return invalid("Reserved domain that cannot receive mail");
+  if (PLACEHOLDER_DOMAINS.has(domain)) return invalid("Placeholder domain");
+  if (PLACEHOLDER_LOCALS.has(local)) return invalid("Placeholder email address");
+
+  // A long run of pure hex is an anti-scraping token, most often Cloudflare's
+  // email-obfuscation payload lifted verbatim off the page. It is never a
+  // mailbox, and mailing it can land the sender in a spam trap.
+  if (/^[0-9a-f]{16,}$/.test(local)) {
+    return invalid("Obfuscation token, not an address");
+  }
+
+  return { value: decoded };
+}
+
+/**
  * Validate/normalise a phone number. Placeholders and empties come back as
  * { value: null }; a value that survives must be digits with the usual
  * punctuation (+ ( ) . - / spaces) plus an optional ext/x extension, and
