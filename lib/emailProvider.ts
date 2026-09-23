@@ -313,26 +313,59 @@ async function sendWithSES(args: SendArgs) {
     }
     const raw = new TextEncoder().encode(lines.join("\r\n"));
 
-    const resp = await ses.send(
-      new SendEmailCommand({
-        Content: { Raw: { Data: raw } },
-        ConfigurationSetName: process.env.SES_CONFIG_SET || undefined,
-        EmailTags: emailTags.length ? emailTags : undefined,
-      })
-    );
+    const resp = await sendViaSes(ses, SendEmailCommand, {
+      Content: { Raw: { Data: raw } },
+      EmailTags: emailTags.length ? emailTags : undefined,
+    });
     return { id: resp.MessageId ?? null };
   }
 
-  const resp = await ses.send(
-    new SendEmailCommand({
-      FromEmailAddress: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
-      Destination: { ToAddresses: toList(to) },
-      Content: { Simple: { Subject: { Data: subject }, Body: body } },
-      ConfigurationSetName: process.env.SES_CONFIG_SET || undefined,
-      EmailTags: emailTags.length ? emailTags : undefined,
-    })
-  );
+  const resp = await sendViaSes(ses, SendEmailCommand, {
+    FromEmailAddress: fromName ? `${fromName} <${fromEmail}>` : fromEmail,
+    Destination: { ToAddresses: toList(to) },
+    Content: { Simple: { Subject: { Data: subject }, Body: body } },
+    EmailTags: emailTags.length ? emailTags : undefined,
+  });
   return { id: resp.MessageId ?? null };
+}
+
+/**
+ * The configuration set named in SES_CONFIG_SET, once SES has said it does not
+ * exist. Remembered for the life of the process so each send doesn't pay for
+ * a failed attempt first; restart after creating the set to use it again.
+ */
+let missingConfigSet: string | null = null;
+
+function isMissingConfigSet(e: any): boolean {
+  return /configuration set\b.*does not exist/i.test(String(e?.message || ""));
+}
+
+/**
+ * Send with the configuration set when one is configured — it is what routes
+ * bounces to the app — but never let a wrong SES_CONFIG_SET stop mail. SES
+ * rejects every send that names a set it doesn't have ("Configuration set <X>
+ * does not exist"), which silently took down all campaign and invoice mail.
+ * On that error the send is retried without the set and the problem is logged
+ * loudly: mail goes out, only bounce tracking is lost until the set is fixed.
+ */
+export async function sendViaSes(ses: any, SendEmailCommand: any, input: Record<string, any>) {
+  const set = process.env.SES_CONFIG_SET;
+  if (set && missingConfigSet !== set) {
+    try {
+      return await ses.send(new SendEmailCommand({ ...input, ConfigurationSetName: set }));
+    } catch (e: any) {
+      if (!isMissingConfigSet(e)) throw e;
+      missingConfigSet = set;
+      console.error(
+        `🚨 [SES] SES_CONFIG_SET="${set}" does not exist in region ` +
+          `${process.env.SES_REGION || process.env.AWS_REGION || "us-east-1"}. ` +
+          "Sending WITHOUT a configuration set, so bounces will not reach the app. " +
+          "Create the set in that region (with an SNS event destination) or fix SES_CONFIG_SET, " +
+          "then restart: `pm2 restart leadsentra --update-env`."
+      );
+    }
+  }
+  return ses.send(new SendEmailCommand(input));
 }
 
 /** RFC 2047 encoded-word for non-ASCII subject lines. */

@@ -413,6 +413,10 @@ function isRecipientFault(message: string): boolean {
     "sending paused", "account is paused",
     "timeout", "etimedout", "econnreset", "enotfound", "network",
     "no email provider configured", "aws_access_key_id",
+    // "Configuration set <X> does not exist" is a sending-account setting, but
+    // its "does not exist" matched the recipient list below and suppressed
+    // every address a campaign tried while SES_CONFIG_SET was wrong.
+    "configuration set", "configurationset",
   ];
   if (senderFault.some((p) => m.includes(p))) return false;
 
