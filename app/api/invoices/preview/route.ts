@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
-import { normalizeItems, computeTotals, num } from "@/lib/invoices";
+import { normalizeItems, computeTotals, num, peekNextInvoiceNumber } from "@/lib/invoices";
 import { generateInvoicePdf, type InvoicePdfData } from "@/lib/invoicePdf";
 import { readPublicFile } from "@/lib/invoiceUpload";
 import { resolveSellerProfile } from "@/lib/companyProfilesRepo";
@@ -64,9 +64,14 @@ export async function POST(req: Request) {
     : new Date().toISOString().slice(0, 10);
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
   const prefix = (settings?.invoice_prefix || "").trim().replace(/\/+$/, "");
-  // A typed-in invoice no is previewed as-is; blank shows the auto-number shape.
+  // A typed-in invoice no is previewed as-is; blank shows the number saving
+  // will assign. Should that lookup fail, the auto-number shape is shown
+  // rather than failing the preview.
   const previewNumber =
-    s(body.invoice_number, 64) || (prefix ? `${prefix}/${year}/##` : `PI-${year}-####`);
+    s(body.invoice_number, 64) ||
+    (await peekNextInvoiceNumber(db, session.id, year, prefix).catch(() =>
+      prefix ? `${prefix}/${year}/##` : `PI-${year}-####`
+    ));
 
   const data: InvoicePdfData = {
     invoice_number: previewNumber,

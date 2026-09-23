@@ -172,6 +172,43 @@ export async function nextInvoiceNumber(
 }
 
 /**
+ * The number the next saved invoice will get, without taking it — for the
+ * preview, which used to print a placeholder ("PI-2026-####") that read like a
+ * broken number. Same format and same skip-if-taken rule as
+ * nextInvoiceNumber; it can still move on if another invoice is saved first.
+ *
+ * `conn` is whatever runs queries (the pool is fine): this module is bundled
+ * into the client, so it takes the connection rather than importing it.
+ */
+export async function peekNextInvoiceNumber(
+  conn: Pick<PoolConnection, "execute">,
+  userId: string,
+  year: number,
+  prefix?: string | null
+): Promise<string> {
+  const clean = (prefix || "").trim().replace(/[\/]+$/, "");
+  const format = (n: number) =>
+    clean ? `${clean}/${year}/${String(n).padStart(2, "0")}` : `PI-${year}-${String(n).padStart(4, "0")}`;
+
+  const [rows] = await conn.execute(
+    "SELECT last_seq FROM proforma_invoice_seq WHERE user_id = ? AND prefix_key = ? AND yr = ?",
+    [userId, clean.slice(0, 64), year]
+  );
+  let next = Number((rows as any[])[0]?.last_seq || 0);
+  let number = format(next + 1);
+  for (let i = 0; i < 200; i++) {
+    next += 1;
+    number = format(next);
+    const [taken] = await conn.execute(
+      "SELECT 1 FROM proforma_invoices WHERE user_id = ? AND invoice_number = ? LIMIT 1",
+      [userId, number]
+    );
+    if (!(taken as any[]).length) break;
+  }
+  return number;
+}
+
+/**
  * How many addresses one proforma invoice may be emailed to at once. Enough
  * for billing + procurement + the person who asked for it; low enough that the
  * send never turns into a mailshot.
