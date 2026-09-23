@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/auth";
 import { resolveMailAccount, toImapConfig } from "@/lib/mailAccount";
-import { listMessages } from "@/lib/imap";
+import { describeImapError, listMessages } from "@/lib/imap";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,9 +28,12 @@ export async function GET(req: Request) {
     const messages = await listMessages(toImapConfig(row), { mailbox, limit, search });
     return NextResponse.json({ messages });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Failed to load messages" },
-      { status: 502 }
-    );
+    // A rejected login is the usual cause, and it's fixable by the user — say
+    // so, rather than passing on imapflow's bare "Command failed".
+    const { detail, authFailed } = describeImapError(e);
+    const error = authFailed
+      ? `The mail server rejected the password for ${row.username}. Update it under Inbox → Settings.`
+      : `Could not load messages: ${detail}`;
+    return NextResponse.json({ error, authFailed }, { status: 502 });
   }
 }

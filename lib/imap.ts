@@ -65,18 +65,24 @@ export async function testConnection(
     } catch {
       /* ignore */
     }
-    // Surface the server's actual reason where possible. imapflow puts the
-    // human text in responseText and a code (e.g. AUTHENTICATIONFAILED) in
-    // serverResponseCode; "Command failed" alone is unhelpfully generic.
-    const authFailed =
-      e?.authenticationFailed || e?.serverResponseCode === "AUTHENTICATIONFAILED";
-    const detail =
-      e?.responseText ||
-      e?.response ||
-      (authFailed ? "the email or password was rejected" : e?.message) ||
-      "connection failed";
-    return { ok: false, error: detail, authFailed: !!authFailed } as any;
+    const { detail, authFailed } = describeImapError(e);
+    return { ok: false, error: detail, authFailed } as any;
   }
+}
+
+/**
+ * The server's actual reason for an IMAP failure. imapflow puts the human text
+ * in responseText and a code (e.g. AUTHENTICATIONFAILED) in serverResponseCode;
+ * its own message is just "Command failed", which tells nobody what to fix.
+ */
+export function describeImapError(e: any): { detail: string; authFailed: boolean } {
+  const authFailed = !!(e?.authenticationFailed || e?.serverResponseCode === "AUTHENTICATIONFAILED");
+  const detail =
+    e?.responseText ||
+    e?.response ||
+    (authFailed ? "the email or password was rejected" : e?.message) ||
+    "connection failed";
+  return { detail: String(detail), authFailed };
 }
 
 function mapItem(m: any): MsgListItem {
