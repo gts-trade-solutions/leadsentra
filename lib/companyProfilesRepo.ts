@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
-import { COMPANY_TEXT_FIELDS, type CompanyProfile } from "./companyProfiles";
+import { COMPANY_TEXT_FIELDS, findCompanyByName, type CompanyProfile } from "./companyProfiles";
 
 /**
  * DB access for company profiles (rows of invoice_settings).
@@ -62,12 +62,67 @@ export async function resolveCompanyProfile(
   return getDefaultCompanyProfile(userId);
 }
 
+/**
+ * The company an invoice is issued as, taking the typed seller name into account.
+ *
+ * The form picks a company, but its "Company name" box stays editable. When the
+ * typed name is a different company from the one picked, printing the picked
+ * company's logo, seal and number series under it would be the wrong
+ * letterhead, so:
+ *
+ *   * a name matching another saved company switches to that company;
+ *   * a name matching nothing, with `save_seller_company` set, is saved as a
+ *     new company (when `create` is true) and the invoice is issued as it —
+ *     no logo, signature or seal until some are uploaded for it;
+ *   * otherwise the picked company stands, as before.
+ *
+ * `create: false` (the preview) never writes: a company that would be created
+ * comes back as null, so the preview shows no other company's images either.
+ */
+export async function resolveSellerProfile(
+  userId: string,
+  body: Record<string, any>,
+  opts: { create: boolean }
+): Promise<{ profile: CompanyProfile | null; created: boolean }> {
+  const picked = await resolveCompanyProfile(userId, body.company_profile_id);
+  const typed = s(body.seller_company, 255);
+  if (!typed) return { profile: picked, created: false };
+  if (picked && findCompanyByName([picked], typed)) return { profile: picked, created: false };
+
+  const match = findCompanyByName(await listCompanyProfiles(userId), typed);
+  if (match) return { profile: match, created: false };
+  if (!body.save_seller_company) return { profile: picked, created: false };
+  if (!opts.create) return { profile: null, created: false };
+
+  const profile = await createCompanyProfile(userId, {
+    values: {
+      label: typed,
+      seller_company: typed,
+      seller_address: s(body.seller_address, 2000),
+      gstin: s(body.seller_gstin, 32)?.toUpperCase() ?? null,
+      pan: s(body.seller_pan, 32)?.toUpperCase() ?? null,
+      email: s(body.seller_email, 255),
+      phone: s(body.seller_phone, 64),
+      bank_name: s(body.bank_name, 255),
+      bank_account: s(body.bank_account, 64),
+      bank_branch: s(body.bank_branch, 255),
+      bank_ifsc: s(body.bank_ifsc, 32)?.toUpperCase() ?? null,
+      payment_terms: s(body.payment_terms, 512),
+      delivery_terms: s(body.delivery_terms, 255),
+      declaration: s(body.declaration, 2000),
+      signatory_name: s(body.signatory_name, 255),
+    },
+  });
+  return { profile, created: true };
+}
+
 export type CompanyProfileWrite = {
   /** Text columns; only the keys present are written. */
   values: Record<string, string | null>;
   /** Set only when a new file was uploaded, so saving text keeps the old image. */
   logo_path?: string;
   signature_path?: string;
+  seal_path?: string;
 };
 
 export async function createCompanyProfile(
@@ -88,6 +143,10 @@ export async function createCompanyProfile(
   if (write.signature_path !== undefined) {
     cols.push("signature_path");
     params.push(write.signature_path);
+  }
+  if (write.seal_path !== undefined) {
+    cols.push("seal_path");
+    params.push(write.seal_path);
   }
 
   // The first company a user saves is their default — otherwise nothing would
@@ -125,6 +184,10 @@ export async function updateCompanyProfile(
   if (write.signature_path !== undefined) {
     sets.push("signature_path = ?");
     params.push(write.signature_path);
+  }
+  if (write.seal_path !== undefined) {
+    sets.push("seal_path = ?");
+    params.push(write.seal_path);
   }
   if (sets.length) {
     await db.execute(

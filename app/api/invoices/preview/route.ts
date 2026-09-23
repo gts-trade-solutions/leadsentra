@@ -4,7 +4,7 @@ import { getUser } from "@/lib/auth";
 import { normalizeItems, computeTotals, num } from "@/lib/invoices";
 import { generateInvoicePdf, type InvoicePdfData } from "@/lib/invoicePdf";
 import { readPublicFile } from "@/lib/invoiceUpload";
-import { resolveCompanyProfile } from "@/lib/companyProfilesRepo";
+import { resolveSellerProfile } from "@/lib/companyProfilesRepo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,9 +44,10 @@ export async function POST(req: Request) {
       "billing_profiles"
     ),
     // The company the form is issuing as, so the preview carries that
-    // company's logo, signature and invoice-number prefix — not the default
-    // company's, which would show the wrong letterhead.
-    resolveCompanyProfile(session.id, s(body.company_profile_id, 36)).catch((e) => {
+    // company's logo, signature, seal and invoice-number prefix — not the default
+    // company's, which would show the wrong letterhead. A company that saving
+    // would create is not created here: it previews with no images, as it will print.
+    resolveSellerProfile(session.id, body, { create: false }).then((r) => r.profile).catch((e) => {
       console.error("[invoices] preview could not read invoice_settings", e);
       return null;
     }),
@@ -124,15 +125,17 @@ export async function POST(req: Request) {
     signatory_name: s(body.signatory_name) ?? (settings?.signatory_name || null),
   };
 
-  const [logoBuf, sigBuf] = await Promise.all([
+  const [logoBuf, sigBuf, sealBuf] = await Promise.all([
     settings?.logo_path ? readPublicFile(settings.logo_path) : Promise.resolve(null),
     settings?.signature_path ? readPublicFile(settings.signature_path) : Promise.resolve(null),
+    settings?.seal_path ? readPublicFile(settings.seal_path) : Promise.resolve(null),
   ]);
 
   try {
     const bytes = await generateInvoicePdf(data, {
       logo: logoBuf ? new Uint8Array(logoBuf) : null,
       signature: sigBuf ? new Uint8Array(sigBuf) : null,
+      seal: sealBuf ? new Uint8Array(sealBuf) : null,
     });
     return new NextResponse(Buffer.from(bytes), {
       status: 200,

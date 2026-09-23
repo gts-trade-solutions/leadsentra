@@ -2,7 +2,7 @@
  * Company profiles — the seller identities a user can invoice as.
  *
  * One row of invoice_settings per company: its name, address, tax numbers,
- * bank details, logo, signature and invoice prefix. One is the default, used
+ * bank details, logo, signature, seal and invoice prefix. One is the default, used
  * wherever an invoice doesn't name a company (and by offers).
  *
  * Pure types and helpers only — the SQL lives in lib/companyProfilesRepo.ts —
@@ -36,6 +36,7 @@ export type CompanyProfile = Record<CompanyTextField, string | null> & {
   is_default: number;
   logo_path: string | null;
   signature_path: string | null;
+  seal_path: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -53,6 +54,38 @@ export function companyProfileLabel(p: Partial<CompanyProfile> | null | undefine
 export function companyProfileSummary(p: CompanyProfile): string {
   const address = String(p.seller_address || "").split(/\r?\n/)[0] || "";
   return [p.gstin, address, p.email].map((v) => String(v || "").trim()).filter(Boolean).join(" · ");
+}
+
+/**
+ * A company name reduced to letters and digits, lower-cased, so
+ * "GTS Trade Solutions Pvt. Ltd." and "gts trade solutions pvt ltd" are the
+ * same company when an invoice's typed seller is matched to a saved one.
+ */
+export function companyNameKey(name: string | null | undefined): string {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** The saved company whose name (or short name) is exactly this one, if any. */
+export function findCompanyByName(
+  list: CompanyProfile[],
+  name: string | null | undefined
+): CompanyProfile | null {
+  const key = companyNameKey(name);
+  if (!key) return null;
+  return (
+    list.find((c) => companyNameKey(c.seller_company) === key) ||
+    list.find((c) => companyNameKey(c.label) === key) ||
+    null
+  );
+}
+
+/** Search box on the invoice form: name, short name, GSTIN, email or address. */
+export function companyMatches(c: CompanyProfile, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [c.label, c.seller_company, c.gstin, c.email, c.seller_address].some((f) =>
+    String(f || "").toLowerCase().includes(q)
+  );
 }
 
 /** The "Your company" block on the invoice form. */

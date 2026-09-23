@@ -47,6 +47,8 @@ export default function InvoiceSettings() {
   const [signaturePath, setSignaturePath] = useState<string | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [signatureFile, setSignatureFile] = useState<File | null>(null);
+  const [sealPath, setSealPath] = useState<string | null>(null);
+  const [sealFile, setSealFile] = useState<File | null>(null);
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -58,6 +60,8 @@ export default function InvoiceSettings() {
     setSignaturePath(c?.signature_path ?? null);
     setLogoFile(null);
     setSignatureFile(null);
+    setSealPath(c?.seal_path ?? null);
+    setSealFile(null);
     setDirty(false);
   }, []);
 
@@ -106,6 +110,7 @@ export default function InvoiceSettings() {
       for (const k of COMPANY_TEXT_FIELDS) fd.append(k, form[k] || "");
       if (logoFile) fd.append("logo", logoFile);
       if (signatureFile) fd.append("signature", signatureFile);
+      if (sealFile) fd.append("seal", sealFile);
 
       const res = await fetch(
         currentId ? `/api/invoices/companies/${currentId}` : "/api/invoices/companies",
@@ -182,7 +187,7 @@ export default function InvoiceSettings() {
         </button>
         <SectionHeader
           title="Companies & invoice settings"
-          description="Set a company up once — details, bank, logo, signature — and pick it when you raise an invoice."
+          description="Set a company up once — details, bank, logo, signature, seal — and pick it when you raise an invoice."
         >
           <button
             onClick={() => switchTo(null)}
@@ -336,8 +341,8 @@ export default function InvoiceSettings() {
             </section>
 
             <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
-              <h2 className="text-sm font-semibold text-white mb-4">Logo &amp; signature (images)</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <h2 className="text-sm font-semibold text-white mb-4">Logo, signature &amp; seal (images)</h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className={labelCls}>Logo {logoPath && <span className="text-emerald-500">· uploaded</span>}</label>
                   <input type="file" accept="image/*" className="text-sm text-gray-300" onChange={(e) => { setLogoFile(e.target.files?.[0] || null); setDirty(true); }} />
@@ -348,9 +353,14 @@ export default function InvoiceSettings() {
                   <input type="file" accept="image/*" className="text-sm text-gray-300" onChange={(e) => { setSignatureFile(e.target.files?.[0] || null); setDirty(true); }} />
                   {signaturePath && <img src={signaturePath} alt="signature" className="mt-2 h-12 bg-white rounded p-1" />}
                 </div>
+                <div>
+                  <label className={labelCls}>Company seal {sealPath && <span className="text-emerald-500">· uploaded</span>}</label>
+                  <input type="file" accept="image/*" className="text-sm text-gray-300" onChange={(e) => { setSealFile(e.target.files?.[0] || null); setDirty(true); }} />
+                  {sealPath && <img src={sealPath} alt="seal" className="mt-2 h-16 bg-white rounded p-1" />}
+                </div>
               </div>
               <p className="text-xs text-gray-500 mt-3">
-                Each company carries its own logo and signature — they print on the invoices issued under it.
+                Each company carries its own logo, signature and seal — they print on the invoices issued under it. A PNG with a transparent background looks best for the seal and signature.
               </p>
             </section>
 

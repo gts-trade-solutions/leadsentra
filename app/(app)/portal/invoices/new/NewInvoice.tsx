@@ -19,8 +19,11 @@ import {
 } from "@/lib/billTo";
 import {
   companyBankFields,
+  companyMatches,
   companyProfileLabel,
+  companyProfileSummary,
   companySellerFields,
+  findCompanyByName,
   hasBankDetails,
   type CompanyProfile,
 } from "@/lib/companyProfiles";
@@ -103,6 +106,10 @@ export default function NewInvoice() {
   /** The companies this user can invoice as, and which one this invoice uses. */
   const [companies, setCompanies] = useState<CompanyProfile[]>([]);
   const [companyId, setCompanyId] = useState("");
+  /** Suggestions under the "Company name" box are showing. */
+  const [sellerSuggestOpen, setSellerSuggestOpen] = useState(false);
+  /** A typed company that matches no saved one is saved as a new company on submit. */
+  const [saveSellerCompany, setSaveSellerCompany] = useState(true);
   /** Seller details missing from the invoice settings, named for the warning. */
   const [sellerGaps, setSellerGaps] = useState<string[]>([]);
   /** Extra people this invoice is emailed to, alongside the customer. */
@@ -280,6 +287,20 @@ export default function NewInvoice() {
     [billTo, contactQuery, hasPick]
   );
 
+  // The saved company the typed "Company name" is (punctuation and case aside).
+  // When it names none, this invoice is for a company not saved yet.
+  const matchedCompany = useMemo(() => findCompanyByName(companies, seller.company), [companies, seller.company]);
+  const isNewSeller = !!seller.company.trim() && !matchedCompany;
+  // A company that was picked, then its name edited, isn't the picked one any more.
+  const issuingCompanyId = matchedCompany?.id || (isNewSeller ? "" : companyId);
+  const sellerSuggestions = useMemo(
+    () =>
+      companies
+        .filter((c) => c.id !== matchedCompany?.id && companyMatches(c, seller.company))
+        .slice(0, 8),
+    [companies, matchedCompany, seller.company]
+  );
+
   const selectedBillToRow = useMemo(
     () => billTo.find((a) => a.id === selectedBillTo) || null,
     [billTo, selectedBillTo]
@@ -388,7 +409,9 @@ export default function NewInvoice() {
       extra_recipients: extraRecipients || null,
       // Which of your companies is issuing this — decides the logo, signature
       // and invoice-number series.
-      company_profile_id: companyId || null,
+      company_profile_id: issuingCompanyId || companyId || null,
+      // A company not saved yet: save it, so next time it's picked by name.
+      save_seller_company: isNewSeller && saveSellerCompany,
       seller_company: seller.company || null,
       seller_address: seller.address || null,
       seller_gstin: seller.gstin || null,
@@ -463,7 +486,7 @@ export default function NewInvoice() {
     fd.append("customer_pan", customer.pan || "");
     fd.append("customer_address", customer.address || "");
     fd.append("bill_to_id", selectedBillTo || "");
-    fd.append("company_profile_id", companyId || "");
+    fd.append("company_profile_id", issuingCompanyId || companyId || "");
     fd.append("extra_recipients", extraRecipients || "");
     fd.append("currency", currency);
     fd.append("issue_date", issueDate);
@@ -649,20 +672,68 @@ export default function NewInvoice() {
             ))}
           </select>
           <p className="text-xs text-gray-500 mt-1">
-            Its logo, signature and invoice-number series are used for this invoice.
+            Its logo, signature, seal and invoice-number series are used for this invoice.
           </p>
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
+        <div className="relative">
           <label className={labelCls}>Company name</label>
           <input
             className={inputCls}
             value={seller.company}
-            onChange={(e) => setSeller({ ...seller, company: e.target.value })}
-            placeholder="RACE INNOVATIONS PVT LTD"
+            onChange={(e) => {
+              setSeller({ ...seller, company: e.target.value });
+              setSellerSuggestOpen(true);
+            }}
+            onFocus={() => setSellerSuggestOpen(true)}
+            onBlur={() => setSellerSuggestOpen(false)}
+            placeholder={companies.length ? "Search your companies or type a new one" : "RACE INNOVATIONS PVT LTD"}
+            autoComplete="off"
           />
+          {/* Saved companies matching what's typed. Picking one fills the whole
+              block — address, tax numbers, bank — exactly like the picker above.
+              onMouseDown, not onClick: it has to land before the input's blur. */}
+          {sellerSuggestOpen && sellerSuggestions.length > 0 && (
+            <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto rounded-lg border border-gray-700 bg-gray-900 shadow-lg">
+              {sellerSuggestions.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyCompany(c);
+                    setSellerSuggestOpen(false);
+                  }}
+                  className="block w-full text-left px-3 py-2 hover:bg-gray-800"
+                >
+                  <div className="text-sm text-white">{c.seller_company || companyProfileLabel(c)}</div>
+                  {companyProfileSummary(c) && (
+                    <div className="text-xs text-gray-500 truncate">{companyProfileSummary(c)}</div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          {isNewSeller && (
+            <label className="mt-2 flex items-start gap-2 text-xs text-gray-400">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={saveSellerCompany}
+                onChange={(e) => setSaveSellerCompany(e.target.checked)}
+              />
+              <span>
+                New company — save it to your companies with this invoice, so next time you just search its name.
+              </span>
+            </label>
+          )}
+          {matchedCompany && matchedCompany.id !== companyId && (
+            <p className="text-xs text-emerald-500 mt-1">
+              Matches your saved company “{companyProfileLabel(matchedCompany)}” — issued as it.
+            </p>
+          )}
         </div>
         <div>
           <label className={labelCls}>Email</label>
@@ -1179,7 +1250,7 @@ export default function NewInvoice() {
                     </div>
                   </div>
                   <p className="text-xs text-gray-500 mt-4">
-                    PAN, declaration, logo &amp; signature come from your{" "}
+                    PAN, declaration, logo, signature &amp; seal come from your{" "}
                     <a href="/portal/invoices/settings" className="text-emerald-400 underline">invoice settings</a>.
                   </p>
                 </div>

@@ -73,6 +73,8 @@ export type InvoicePdfData = {
 export type InvoicePdfAssets = {
   logo?: Uint8Array | null;
   signature?: Uint8Array | null;
+  /** Company seal / stamp, printed beside the signature. */
+  seal?: Uint8Array | null;
 };
 
 const PAGE_W = 595.28;
@@ -149,6 +151,7 @@ export async function generateInvoicePdf(
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const logo = await embedImage(doc, assets.logo);
   const signature = await embedImage(doc, assets.signature);
+  const seal = await embedImage(doc, assets.seal);
 
   let page = doc.addPage([PAGE_W, PAGE_H]);
   const left = M;
@@ -456,8 +459,11 @@ export async function generateInvoicePdf(
   const decl =
     data.declaration ||
     "Certified that the particulars given above are true and the amount indicated represents the price actually charged and that there is no flow of additional consideration directly or indirectly from the buyer.";
-  const declLines = wrap(decl, font, 7.5, width * 0.55);
-  const sigBlockH = 78;
+  // Wrap to the left column (left + 6 up to the divider at midX, less padding),
+  // so the text never runs into the signatory column.
+  const declLines = wrap(decl, font, 7.5, midX - left - 12);
+  // A seal sits below the "For <company>" line, so it needs a little more room.
+  const sigBlockH = seal ? 90 : 78;
   const declH = Math.max(declLines.length * 10 + 26, sigBlockH);
   box(left, y - declH, width, declH);
   vline(midX, y - declH, y);
@@ -472,6 +478,16 @@ export async function generateInvoicePdf(
     const sw = 90;
     const sh = Math.min((signature.height / signature.width) * sw, 34);
     page.drawImage(signature, { x: metaLabelX, y: y - 16 - sh, width: sw, height: sh });
+  }
+  // The seal goes at the right of the signatory box, clear of the signature
+  // and above "Authorised Signatory". Scaled to fit a square, keeping its
+  // aspect ratio, since seals are usually round but uploads are not always.
+  if (seal) {
+    const fit = 54;
+    const k = Math.min(fit / seal.width, fit / seal.height);
+    const w = seal.width * k;
+    const h = seal.height * k;
+    page.drawImage(seal, { x: right - 8 - w, y: y - 18 - h, width: w, height: h });
   }
   rtxt("Authorised Signatory", right - 6, y - declH + 8, { size: 8 });
   if (data.signatory_name) txt(data.signatory_name, metaLabelX, y - declH + 20, { size: 8, color: MUTED });

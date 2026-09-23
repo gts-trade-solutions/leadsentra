@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
 import { recordInvoiceBillTo } from "./billToRepo";
-import { resolveCompanyProfile, rememberBankDetails } from "./companyProfilesRepo";
+import { resolveSellerProfile, rememberBankDetails } from "./companyProfilesRepo";
 import {
   normalizeItems,
   computeTotals,
@@ -75,12 +75,13 @@ export async function createProformaInvoice(
     extra.valid.filter((e) => e !== primary).slice(0, MAX_INVOICE_RECIPIENTS - 1).join(", ") || null;
 
   // Which of the user's companies this invoice is issued as — the one the form
-  // picked, or their default. Everything the invoice snapshots (address block,
-  // bank, logo, signature, declaration, invoice prefix) comes from it.
-  const companyId = s(body.company_profile_id, 36);
-  const [profile, settings] = await Promise.all([
+  // picked, the saved company the typed seller name matches, or (when asked) a
+  // new company saved from what was typed. Everything the invoice snapshots
+  // (address block, bank, logo, signature, seal, declaration, invoice prefix)
+  // comes from it.
+  const [profile, { profile: settings }] = await Promise.all([
     loadBillingProfile(userId),
-    resolveCompanyProfile(userId, companyId),
+    resolveSellerProfile(userId, body, { create: true }),
   ]);
 
   const seller = {
@@ -109,6 +110,7 @@ export async function createProformaInvoice(
   const signatoryName = s(body.signatory_name) ?? (settings?.signatory_name || null);
   const logoPath = settings?.logo_path || null;
   const signaturePath = settings?.signature_path || null;
+  const sealPath = settings?.seal_path || null;
 
   const discount = Math.max(0, num(body.discount, 0));
   const taxRate = Math.max(0, num(body.tax_rate, 0));
@@ -147,7 +149,7 @@ export async function createProformaInvoice(
          seller_name, seller_email, seller_phone, seller_company, seller_gstin, seller_pan, seller_address,
          ref, payment_terms, delivery_terms,
          bank_name, bank_account, bank_branch, bank_ifsc,
-         declaration, signatory_name, logo_path, signature_path,
+         declaration, signatory_name, logo_path, signature_path, seal_path,
          issue_date, valid_until, currency, subtotal, discount,
          tax_rate, tax_amount, igst_rate, igst_amount, total,
          notes, terms)
@@ -157,7 +159,7 @@ export async function createProformaInvoice(
          ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?, ?, ?,
-         ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
          ?, ?)`,
@@ -168,7 +170,7 @@ export async function createProformaInvoice(
         seller.name, seller.email, seller.phone, seller.company, seller.gstin, seller.pan, seller.address,
         ref, paymentTerms, deliveryTerms,
         bank.name, bank.account, bank.branch, bank.ifsc,
-        declaration, signatoryName, logoPath, signaturePath,
+        declaration, signatoryName, logoPath, signaturePath, sealPath,
         issueDate, validUntil, currency, totals.subtotal, totals.discount,
         totals.tax_rate, totals.tax_amount, totals.igst_rate, totals.igst_amount, totals.total,
         notes, terms,

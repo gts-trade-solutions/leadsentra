@@ -6,7 +6,7 @@ import type { CompanyProfileWrite } from "./companyProfilesRepo";
 /**
  * Turn the multipart body the settings form posts into a company write.
  *
- * Logo and signature are only included when a new file was actually uploaded,
+ * Logo, signature and seal are only included when a new file was actually uploaded,
  * so saving the text fields never wipes an image that is already there.
  */
 export async function readCompanyForm(
@@ -46,6 +46,12 @@ export async function readCompanyForm(
     const saved = await saveInvoiceFile(sig, { allow: ["image/"], maxBytes: 5 * 1024 * 1024 });
     if ("error" in saved) throw new HttpError(400, `Signature: ${saved.error}`);
     write.signature_path = saved.file_path;
+  }
+  const seal = form.get("seal");
+  if (seal instanceof File && seal.size > 0) {
+    const saved = await saveInvoiceFile(seal, { allow: ["image/"], maxBytes: 5 * 1024 * 1024 });
+    if ("error" in saved) throw new HttpError(400, `Seal: ${saved.error}`);
+    write.seal_path = saved.file_path;
   }
 
   return write;

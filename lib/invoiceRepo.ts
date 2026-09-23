@@ -30,6 +30,7 @@ export type InvoiceRecord = {
   signatory_name: string | null;
   logo_path: string | null;
   signature_path: string | null;
+  seal_path: string | null;
   seller_pan: string | null;
   customer_contact_id: string | null;
   customer_company_id: string | null;
@@ -109,6 +110,7 @@ function mapInvoice(row: any): InvoiceRecord {
     signatory_name: row.signatory_name,
     logo_path: row.logo_path,
     signature_path: row.signature_path,
+    seal_path: row.seal_path ?? null,
     seller_pan: row.seller_pan,
     customer_contact_id: row.customer_contact_id,
     customer_company_id: row.customer_company_id,
@@ -225,15 +227,17 @@ export async function loadInvoiceWithItems(
   return { invoice, items };
 }
 
-/** Read the invoice's logo/signature image bytes (if any) for the PDF. */
+/** Read the invoice's logo/signature/seal image bytes (if any) for the PDF. */
 export async function loadInvoiceAssets(invoice: InvoiceRecord): Promise<InvoicePdfAssets> {
-  const [logo, signature] = await Promise.all([
+  const [logo, signature, seal] = await Promise.all([
     invoice.logo_path ? readPublicFile(invoice.logo_path) : Promise.resolve(null),
     invoice.signature_path ? readPublicFile(invoice.signature_path) : Promise.resolve(null),
+    invoice.seal_path ? readPublicFile(invoice.seal_path) : Promise.resolve(null),
   ]);
   return {
     logo: logo ? new Uint8Array(logo) : null,
     signature: signature ? new Uint8Array(signature) : null,
+    seal: seal ? new Uint8Array(seal) : null,
   };
 }
 
