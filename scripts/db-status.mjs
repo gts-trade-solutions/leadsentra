@@ -4,7 +4,7 @@
 //
 // Usage: node scripts/db-status.mjs
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import mysql from "mysql2/promise";
 
@@ -23,37 +23,41 @@ if (!process.env.MYSQL_USER) {
   process.exit(1);
 }
 
-// table -> the migration that creates it, in the order they must be applied.
-const EXPECTED = [
-  ["suppressions", "2026-05-12_suppressions.sql"],
-  ["company_segments", "2026-05-13_segments.sql"],
-  ["company_catalogues", "2026-06-23_company_catalogues.sql"],
-  ["mail_accounts", "2026-06-23_mail_accounts.sql"],
-  ["proforma_invoices", "2026-06-24_proforma_invoices.sql"],
-  ["proforma_invoice_items", "2026-06-24_proforma_invoices.sql"],
-  ["proforma_invoice_seq", "2026-06-24_proforma_invoices.sql"],
-  ["invoice_settings", "2026-06-24_proforma_invoices_v2.sql"],
-  ["company_memberships", "2026-06-29_company_memberships.sql"],
-  ["offer_templates", "2026-06-29_offer_templates.sql"],
-  ["offers", "2026-06-29_offers.sql"],
-  ["offer_routes", "2026-06-29_offers.sql"],
-  ["orders", "2026-06-29_orders.sql"],
-];
-
-// Columns added by later migrations to tables that already exist. These only
-// apply once the parent table is there, so a missing table hides them — re-run
-// this script after creating tables to catch the follow-on ALTERs.
-const EXPECTED_COLUMNS = [
-  ["proforma_invoices", "subject", "2026-07-25_pi_subject_igst.sql"],
-  ["proforma_invoices", "igst_rate", "2026-07-25_pi_subject_igst.sql"],
-  ["proforma_invoices", "bank_name", "2026-06-24_proforma_invoices_v2.sql"],
-  ["mail_accounts", "label", "2026-07-18_mail_accounts_multi.sql"],
-  ["mail_accounts", "is_default", "2026-07-18_mail_accounts_multi.sql"],
-  ["contacts", "contact_type", "2026-07-18_contact_type.sql"],
-  ["companies", "facebook_url", "2026-07-18_company_socials.sql"],
-  ["company_catalogues", "button_label", "2026-07-18_catalogue_button_label.sql"],
-  ["campaigns", "low_signal", "2026-07-18_campaign_low_signal.sql"],
-];
+// What the migrations expect, read from the migration files themselves rather
+// than kept by hand: a hand-kept list silently fell behind (the company-profile,
+// bill-to and seal migrations were all missing from it), so this reported
+// "nothing outstanding" on a database that could not create an invoice.
+//
+//   * every `CREATE TABLE [IF NOT EXISTS] x` (not TEMPORARY) -> table x
+//   * every `ALTER TABLE x ... ADD COLUMN y`, including ones inside a
+//     guarded PREPARE string                                   -> column x.y
+//
+// Files are read in name order, so the first migration that mentions a table
+// or column is the one reported for it.
+const MIGRATIONS_DIR = resolve(process.cwd(), "migrations");
+const EXPECTED = [];
+const EXPECTED_COLUMNS = [];
+{
+  const seenT = new Set();
+  const seenC = new Set();
+  for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort()) {
+    // Drop -- comments so prose like "ALTER TABLE ... ADD COLUMN" in a header
+    // is never taken for a statement.
+    const sql = readFileSync(resolve(MIGRATIONS_DIR, file), "utf8").replace(/--[^\n]*/g, "");
+    for (const m of sql.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(\w+)`?/gi)) {
+      const table = m[1].toLowerCase();
+      if (!seenT.has(table)) { seenT.add(table); EXPECTED.push([table, file]); }
+    }
+    // One ALTER statement ends at ";" or, inside a PREPARE string, at "',".
+    for (const m of sql.matchAll(/ALTER\s+TABLE\s+`?(\w+)`?([\s\S]*?)(?:;|',)/gi)) {
+      const table = m[1].toLowerCase();
+      for (const a of m[2].matchAll(/ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(\w+)`?/gi)) {
+        const key = `${table}.${a[1].toLowerCase()}`;
+        if (!seenC.has(key)) { seenC.add(key); EXPECTED_COLUMNS.push([table, a[1], file]); }
+      }
+    }
+  }
+}
 
 const conn = await mysql.createConnection({
   host: process.env.MYSQL_HOST,
