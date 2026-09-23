@@ -320,7 +320,9 @@ export async function generateInvoicePdf(
     bank.push(["IFSC Code", data.bank_ifsc || "-"]);
   }
   const custH = custLines.length * 11.5 + 10;
-  const bankH = (bank.length ? bank.length * 13 : 13) + 16;
+  // Rows start 26pt down and sit 13pt apart; leave the same ~11pt below the
+  // last one as the customer column does, so "IFSC Code" can't touch the table.
+  const bankH = (bank.length ? bank.length * 13 : 13) + 24;
   const band2H = Math.max(custH, bankH);
 
   box(left, y - band2H, width, band2H);
@@ -346,20 +348,29 @@ export async function generateInvoicePdf(
   const cDesc = left + 95;
   const cRate = right - 170;
   const cAmt = right - 85;
-  const descW = cRate - cDesc - 6;
+  // A Qty column only when some line isn't a single unit — otherwise a Rate
+  // that differs from the Amount would be unexplained, but most invoices are
+  // one-off services and keep the template's plain Rate | Amount layout.
+  const showQty = data.items.some((it) => num(it.quantity) !== 1);
+  const cQty = showQty ? cRate - 42 : cRate;
+  const descW = cQty - cDesc - 6;
+  const colXs = showQty ? [cPart, cDesc, cQty, cRate, cAmt] : [cPart, cDesc, cRate, cAmt];
+  const cur = (data.currency || "INR").toUpperCase();
 
   const headH = 26;
   const drawItemsHeader = () => {
     page.drawRectangle({ x: left, y: y - headH, width, height: headH, color: LIGHT });
     box(left, y - headH, width, headH);
-    [cPart, cDesc, cRate, cAmt].forEach((x) => vline(x, y - headH, y));
+    colXs.forEach((x) => vline(x, y - headH, y));
     txt("Sl.No", cSl + 3, y - 11, { size: 7.5, bold: true });
     txt("Part No", cPart + 3, y - 11, { size: 7.5, bold: true });
     txt("Description", cDesc + 3, y - 11, { size: 7.5, bold: true });
-    rtxt("Rate", cAmt - 6, y - 8, { size: 7.5, bold: true });
-    txt("INR", cRate + 4, y - 19, { size: 7, color: MUTED });
-    rtxt("Amount", right - 4, y - 8, { size: 7.5, bold: true });
-    txt("INR", cAmt + 4, y - 19, { size: 7, color: MUTED });
+    if (showQty) rtxt("Qty", cRate - 6, y - 11, { size: 7.5, bold: true });
+    // Currency sits right under its heading, both right-aligned like the figures.
+    rtxt("Rate", cAmt - 6, y - 10, { size: 7.5, bold: true });
+    rtxt(cur, cAmt - 6, y - 20, { size: 7, color: MUTED });
+    rtxt("Amount", right - 4, y - 10, { size: 7.5, bold: true });
+    rtxt(cur, right - 4, y - 20, { size: 7, color: MUTED });
     y -= headH;
   };
 
@@ -383,8 +394,15 @@ export async function generateInvoicePdf(
 
   data.items.forEach((it, idx) => {
     const tLines = idx === 0 && subjectTitle ? wrap(subjectTitle, bold, 8.5, descW) : [];
-    const dLines = wrap(it.description, font, 8, descW);
-    const rowH = Math.max(tLines.length * titleLineH + dLines.length * lineH, lineH) + rowPad;
+    // Line breaks typed in the description are kept: wrap() works on one
+    // paragraph, and a raw newline would otherwise print as "?".
+    const dLines = String(it.description || "")
+      .split(/\r?\n/)
+      .flatMap((para) => (para.trim() ? wrap(para, font, 8, descW) : [""]));
+    const hsn = String(it.hsn || "").trim();
+    const hLines = hsn ? wrap(`HSN/SAC : ${hsn}`, font, 7.5, descW) : [];
+    const rowH =
+      Math.max(tLines.length * titleLineH + (dLines.length + hLines.length) * lineH, lineH) + rowPad;
     if (y - rowH < M + 150) newPage();
     const top = y;
     txt(String(idx + 1), cSl + 4, top - 9, { size: 8 });
@@ -392,6 +410,8 @@ export async function generateInvoicePdf(
     let dy = top - 9;
     tLines.forEach((tl) => { txt(tl, cDesc + 3, dy, { size: 8.5, bold: true }); dy -= titleLineH; });
     dLines.forEach((dl) => { txt(dl, cDesc + 3, dy, { size: 8 }); dy -= lineH; });
+    hLines.forEach((hl) => { txt(hl, cDesc + 3, dy, { size: 7.5, color: MUTED }); dy -= lineH; });
+    if (showQty) rtxt(String(Number(num(it.quantity).toFixed(3))), cRate - 6, top - 9, { size: 8 });
     rtxt(pdfMoney(it.unit_price, data.currency), cAmt - 6, top - 9, { size: 8 });
     rtxt(pdfMoney(it.amount, data.currency), right - 4, top - 9, { size: 8, bold: true });
     y -= rowH;
@@ -415,8 +435,11 @@ export async function generateInvoicePdf(
   const minBodyBottom = tableTop - Math.max(120, totalsRowCount * 16 + 12);
   if (y > minBodyBottom) y = minBodyBottom;
 
-  // vertical separators across the full body
-  [cPart, cDesc, cRate, cAmt].forEach((x) => vline(x, y, tableTop));
+  // vertical separators across the full body, and a rule under it so every
+  // column is closed before the totals start
+  colXs.forEach((x) => vline(x, y, tableTop));
+  hline(left, right, y, 0.7);
+  const totalsTop = y;
 
   // Totals rows (right side, inside the Amount/Rate columns)
   const totRow = (label: string, value: string, opts: { bold?: boolean } = {}) => {
@@ -430,6 +453,9 @@ export async function generateInvoicePdf(
   if (data.tax_rate > 0) totRow(`GST ${pct(data.tax_rate)}%`, pdfMoney(data.tax_amount, data.currency));
   if (igstRate > 0) totRow(`IGST ${pct(igstRate)}%`, pdfMoney(igstAmount, data.currency));
   totRow("Total", pdfMoney(data.total, data.currency), { bold: true });
+  // Box the totals: a left edge, and the label | figure divider.
+  vline(cRate, y, totalsTop);
+  vline(cAmt, y, totalsTop);
 
   // close the items box
   hline(left, right, y, 0.7);
@@ -440,7 +466,6 @@ export async function generateInvoicePdf(
   // The figure is right-aligned; the words are constrained to the space to its
   // LEFT and wrap onto extra lines, so a long amount can never overlap/crowd
   // the figure. (amountInWords already reads "Rupees … Only" — no "INR" prefix.)
-  const cur = (data.currency || "INR").toUpperCase();
   const amtStr = `${cur} ${pdfMoney(data.total, data.currency)}`;
   const amtW = bold.widthOfTextAtSize(amtStr, 9);
   const wordsX = left + 6;
