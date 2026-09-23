@@ -138,6 +138,8 @@ export default function NewInvoice() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const previewSeq = useRef(0);
+  /** Which company image is uploading from the form, if any. */
+  const [uploadingImg, setUploadingImg] = useState<"signature" | "seal" | null>(null);
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
 
   // Upload-only state
@@ -735,6 +737,42 @@ export default function NewInvoice() {
       toast({ title: "Error", description: e?.message || String(e), variant: "destructive" });
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** The saved company this invoice is issued as — whose signature and seal it prints. */
+  const issuingCompany = companies.find((c) => c.id === (issuingCompanyId || companyId)) || null;
+
+  /**
+   * Upload a signature or seal from the invoice form. It is saved on the
+   * issuing company, so it is used from now on without choosing it: in the
+   * live preview straight away, in this invoice when saved, and in every later
+   * invoice issued as that company.
+   */
+  async function uploadCompanyImage(kind: "signature" | "seal", file: File) {
+    if (!issuingCompany) return;
+    setUploadingImg(kind);
+    try {
+      const fd = new FormData();
+      fd.append(kind, file);
+      const res = await fetch(`/api/invoices/companies/${issuingCompany.id}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        body: fd,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Upload failed");
+      const updated: CompanyProfile = json.company;
+      setCompanies((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      toast({
+        title: kind === "signature" ? "Signature saved" : "Seal saved",
+        description: `Used automatically on invoices from ${companyProfileLabel(updated)}.`,
+      });
+      if (previewOpen) renderPreview();
+    } catch (e: any) {
+      toast({ title: "Upload failed", description: e?.message || String(e), variant: "destructive" });
+    } finally {
+      setUploadingImg(null);
     }
   }
 
@@ -1465,9 +1503,49 @@ export default function NewInvoice() {
                     />
                   </div>
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  {(["signature", "seal"] as const).map((kind) => {
+                    const path = issuingCompany ? (kind === "signature" ? issuingCompany.signature_path : issuingCompany.seal_path) : null;
+                    return (
+                      <div key={kind}>
+                        <label className={labelCls}>
+                          {kind === "signature" ? "Signature" : "Company seal"}{" "}
+                          {path && <span className="text-emerald-500">· in use</span>}
+                        </label>
+                        {path ? (
+                          <img src={path} alt={kind} className="h-16 bg-white rounded p-1 mb-2" />
+                        ) : (
+                          <p className="text-xs text-gray-500 mb-2">None uploaded yet.</p>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="text-sm text-gray-300"
+                          disabled={!issuingCompany || uploadingImg !== null || editBlocked}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            e.target.value = "";
+                            if (f) uploadCompanyImage(kind, f);
+                          }}
+                        />
+                        {uploadingImg === kind && <p className="text-xs text-gray-400 mt-1">Uploading…</p>}
+                      </div>
+                    );
+                  })}
+                </div>
                 <p className="text-xs text-gray-500 mt-3">
-                  Logo, signature &amp; seal come from the company this invoice is issued as — change them in{" "}
-                  <a href="/portal/invoices/settings" className="text-emerald-400 underline">invoice settings</a>.
+                  {issuingCompany ? (
+                    <>
+                      Uploading saves it on <b>{companyProfileLabel(issuingCompany)}</b> — this invoice and every later
+                      one issued as that company use it automatically. A PNG with a transparent background looks best.
+                    </>
+                  ) : (
+                    <>
+                      This company isn&apos;t saved yet. Save the invoice with &ldquo;save it to your companies&rdquo;
+                      ticked, then add its signature and seal here or in{" "}
+                      <a href="/portal/invoices/settings" className="text-emerald-400 underline">invoice settings</a>.
+                    </>
+                  )}
                 </p>
               </section>
             </>
