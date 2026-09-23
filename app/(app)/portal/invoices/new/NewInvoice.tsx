@@ -5,10 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import PhoneInput from "@/components/PhoneInput";
 import * as XLSX from "xlsx";
-import { ArrowLeft, Plus, Trash2, Save, Send, Upload, FileSpreadsheet, FileText, Eye, Pencil } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Save, Send, Upload, FileSpreadsheet, FileText, Eye, Pencil, Building2 } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import BillToAddressModal from "@/components/BillToAddressModal";
+import AddCompanyModal from "@/components/AddCompanyModal";
 import { toast } from "@/hooks/use-toast";
 import { computeTotals, normalizeItems, formatMoney, num } from "@/lib/invoices";
 import {
@@ -140,6 +141,7 @@ export default function NewInvoice() {
   const previewSeq = useRef(0);
   /** Which company image is uploading from the form, if any. */
   const [uploadingImg, setUploadingImg] = useState<"signature" | "seal" | null>(null);
+  const [addCompanyOpen, setAddCompanyOpen] = useState(false);
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
 
   // Upload-only state
@@ -1257,9 +1259,16 @@ export default function NewInvoice() {
         <div className="flex items-center gap-2 mb-6">
           <TabButton value="manual" icon={FileText} label="Manual (generate PDF)" />
           {!editId && <TabButton value="upload" icon={Upload} label="Upload PDF" />}
+          <button
+            onClick={() => setAddCompanyOpen(true)}
+            className="ml-auto flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border bg-gray-800 border-gray-700 text-gray-300 hover:border-emerald-600 hover:text-white"
+            title="Add one of your companies and issue this invoice as it"
+          >
+            <Building2 className="w-4 h-4" /> Add company
+          </button>
           <a
             href="/portal/invoices/settings"
-            className="ml-auto text-xs text-gray-400 hover:text-emerald-400 underline"
+            className="text-xs text-gray-400 hover:text-emerald-400 underline"
           >
             Edit seller / bank / logo settings →
           </a>
@@ -1656,6 +1665,19 @@ export default function NewInvoice() {
           </aside>
         )}
         </div>
+
+        {addCompanyOpen && (
+          <AddCompanyModal
+            onClose={() => setAddCompanyOpen(false)}
+            onSaved={(c) => {
+              // Issue this invoice as the new company straight away: its
+              // details, bank, signature and seal fill the form.
+              setCompanies((prev) => [...prev.filter((x) => x.id !== c.id), c]);
+              applyCompany(c);
+              setAddCompanyOpen(false);
+            }}
+          />
+        )}
 
         {billToModal !== undefined && (
           <BillToAddressModal
