@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Plus, Send, Download, Trash2, Eye, Settings, Upload, ClipboardCheck, BookUser } from "lucide-react";
+import { FileText, Plus, Send, Download, Trash2, Eye, Settings, Upload, ClipboardCheck, BookUser, Pencil } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
 import SectionHeader from "@/components/SectionHeader";
 import EmptyState from "@/components/EmptyState";
@@ -246,6 +246,15 @@ export default function InvoicesPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
+                        {r.source !== "upload" && (
+                          <button
+                            onClick={() => router.push(`/portal/invoices/new?edit=${r.id}`)}
+                            title="Edit"
+                            className="p-2 rounded-lg hover:bg-gray-700 text-gray-300"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        )}
                         <a
                           href={`/api/invoices/${r.id}/pdf`}
                           target="_blank"

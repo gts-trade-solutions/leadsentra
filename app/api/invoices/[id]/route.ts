@@ -3,6 +3,8 @@ import { gateDelete, pendingDeleteResponse } from "@/lib/deleteRequests";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
 import { loadInvoiceWithItems } from "@/lib/invoiceRepo";
+import { recordInvoiceBillTo } from "@/lib/billToRepo";
+import { rememberBankDetails, resolveSellerProfile } from "@/lib/companyProfilesRepo";
 import {
   normalizeItems,
   computeTotals,
@@ -30,7 +32,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const found = await loadInvoiceWithItems(session.id, params.id);
   if (!found) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  return NextResponse.json({ invoice: found.invoice, items: found.items });
+  // The edit form opens read-only for an invoice already confirmed as an
+  // order, rather than letting someone edit and only then refusing the save.
+  const [orderRows] = await db.execute(
+    "SELECT order_number FROM orders WHERE user_id = ? AND invoice_id = ? LIMIT 1",
+    [session.id, params.id]
+  );
+  const lockedByOrder = ((orderRows as any[])[0]?.order_number as string | undefined) ?? null;
+
+  return NextResponse.json({ invoice: found.invoice, items: found.items, locked_by_order: lockedByOrder });
 }
 
 /**
@@ -38,8 +48,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
  *
  * A proforma is a quotation, not a tax document, so correcting a typo or a
  * price shouldn't mean deleting it and re-keying everything under a new
- * number. Only the fields sent are changed; the invoice number and the
- * created/sent history are not editable here.
+ * number. Only the fields sent are changed. Everything the form shows is
+ * editable — customer, your company block, bank, terms, declaration,
+ * signatory, currency, the invoice number, and which company it is issued as
+ * (which brings that company's logo, signature and seal). The created/sent
+ * history is not.
  *
  * Refused once the invoice has been confirmed into an order: at that point the
  * order holds a snapshot of these values, and editing behind it would leave the
@@ -86,6 +99,20 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     delivery_terms:     { col: "delivery_terms" },
     notes:              { col: "notes", max: 2000 },
     terms:              { col: "terms", max: 2000 },
+    // Your company block, as printed on this invoice.
+    seller_name:        { col: "seller_name" },
+    seller_email:       { col: "seller_email" },
+    seller_phone:       { col: "seller_phone", max: 64 },
+    seller_company:     { col: "seller_company" },
+    seller_gstin:       { col: "seller_gstin", max: 32 },
+    seller_pan:         { col: "seller_pan", max: 32 },
+    seller_address:     { col: "seller_address", max: 2000 },
+    bank_name:          { col: "bank_name" },
+    bank_account:       { col: "bank_account", max: 64 },
+    bank_branch:        { col: "bank_branch" },
+    bank_ifsc:          { col: "bank_ifsc", max: 32 },
+    declaration:        { col: "declaration", max: 2000 },
+    signatory_name:     { col: "signatory_name" },
   };
 
   const sets: string[] = [];
@@ -119,6 +146,32 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         .slice(0, MAX_INVOICE_RECIPIENTS - 1)
         .join(", ") || null
     );
+  }
+
+  // A blank number keeps the current one — an invoice can't be left unnumbered.
+  const newNumber = s(body.invoice_number, 64);
+  if (newNumber && newNumber !== found.invoice.invoice_number) {
+    sets.push("invoice_number = ?");
+    vals.push(newNumber);
+  }
+
+  const currency = s(body.currency, 8);
+  if (currency) {
+    sets.push("currency = ?");
+    vals.push(currency.toUpperCase());
+  }
+
+  // Which of your companies it is issued as. Its logo, signature and seal are
+  // re-taken from that company, so the saved invoice prints exactly what the
+  // preview showed. A typed company not saved yet is saved, as on create.
+  let profileId: string | null = null;
+  if ("company_profile_id" in body || "seller_company" in body) {
+    const { profile } = await resolveSellerProfile(session.id, body, { create: true });
+    if (profile) {
+      profileId = profile.id;
+      sets.push("logo_path = ?", "signature_path = ?", "seal_path = ?");
+      vals.push(profile.logo_path || null, profile.signature_path || null, profile.seal_path || null);
+    }
   }
 
   if ("issue_date" in body && /^\d{4}-\d{2}-\d{2}$/.test(String(body.issue_date || ""))) {
@@ -190,10 +243,41 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     await conn.commit();
   } catch (e: any) {
     await conn.rollback();
+    if (e?.code === "ER_DUP_ENTRY") {
+      return NextResponse.json(
+        { error: `Invoice number ${newNumber} is already used by another of your invoices.` },
+        { status: 409 }
+      );
+    }
     console.error("[invoices] update failed", e);
     return NextResponse.json({ error: e?.message || "Update failed" }, { status: 500 });
   } finally {
     conn.release();
+  }
+
+  // Same follow-ups as creating one, once the edit is committed: the customer
+  // is kept in the address book, and the bank block as the company's default
+  // when asked. Neither can fail the save.
+  if (["customer_name", "customer_email", "customer_company"].some((k) => k in body)) {
+    await recordInvoiceBillTo(session.id, s(body.bill_to_id, 36), {
+      contact_id: s(body.customer_contact_id, 36),
+      company_id: s(body.customer_company_id, 36),
+      name: s(body.customer_name),
+      email: s(body.customer_email),
+      phone: s(body.customer_phone, 64),
+      company: s(body.customer_company),
+      gstin: s(body.customer_gstin, 32),
+      pan: s(body.customer_pan, 32),
+      address: s(body.customer_address, 2000),
+    });
+  }
+  if (body.save_bank_default) {
+    await rememberBankDetails(session.id, profileId, {
+      name: s(body.bank_name),
+      account: s(body.bank_account, 64),
+      branch: s(body.bank_branch),
+      ifsc: s(body.bank_ifsc, 32),
+    });
   }
 
   const fresh = await loadInvoiceWithItems(session.id, params.id);

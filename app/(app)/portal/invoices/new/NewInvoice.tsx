@@ -43,6 +43,9 @@ type TaxKind = "gst" | "igst" | "none";
 
 const blankItem = (): ItemRow => ({ part_no: "", description: "", hsn: "", quantity: "1", unit_price: "0" });
 const todayStr = () => new Date().toISOString().slice(0, 10);
+/** The saved invoice being edited (?edit=<id>), read client-side. */
+const editIdFromUrl = () =>
+  typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("edit") || "";
 
 const inputCls =
   "w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-emerald-600";
@@ -120,6 +123,21 @@ export default function NewInvoice() {
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
   const [message, setMessage] = useState("");
+  const [declaration, setDeclaration] = useState("");
+  const [signatoryName, setSignatoryName] = useState("");
+
+  // Editing a saved invoice instead of creating one.
+  const [editId, setEditId] = useState("");
+  const [editLoaded, setEditLoaded] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  /** Order number when the invoice was confirmed as an order — then it's read-only. */
+  const [lockedBy, setLockedBy] = useState<string | null>(null);
+
+  // Live preview beside the form.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const previewSeq = useRef(0);
   const [items, setItems] = useState<ItemRow[]>([blankItem()]);
 
   // Upload-only state
@@ -134,6 +152,95 @@ export default function NewInvoice() {
   useEffect(() => {
     const qs = typeof window !== "undefined" ? window.location.search : "";
     if (/(\?|&)mode=upload/.test(qs)) setMode("upload");
+  }, []);
+
+  // Editing a saved invoice (?edit=<id>): every field starts from what was saved.
+  useEffect(() => {
+    const id = editIdFromUrl();
+    if (!id) return;
+    setEditId(id);
+    (async () => {
+      try {
+        const res = await fetch(`/api/invoices/${encodeURIComponent(id)}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error || "Could not load the invoice");
+        const inv = json.invoice || {};
+        if (inv.source === "upload") {
+          setEditError(
+            "This invoice is an uploaded PDF, so its contents can't be edited here. Delete it and upload the corrected PDF."
+          );
+          return;
+        }
+        setLockedBy(json.locked_by_order || null);
+        const str = (v: any) => (v === null || v === undefined ? "" : String(v));
+        setInvoiceNumber(str(inv.invoice_number));
+        setSubject(str(inv.subject));
+        setCurrency(str(inv.currency) || "INR");
+        setIssueDate(str(inv.issue_date) || todayStr());
+        setValidUntil(str(inv.valid_until));
+        setDiscount(String(num(inv.discount, 0)));
+        const gst = num(inv.tax_rate, 0);
+        const igst = num(inv.igst_rate, 0);
+        setTaxKind(igst > 0 ? "igst" : gst > 0 ? "gst" : "none");
+        if (gst > 0) setTaxRate(String(gst));
+        if (igst > 0) setIgstRate(String(igst));
+        setSeller({
+          company: str(inv.seller_company),
+          address: str(inv.seller_address),
+          gstin: str(inv.seller_gstin),
+          pan: str(inv.seller_pan),
+          email: str(inv.seller_email),
+          phone: str(inv.seller_phone),
+        });
+        setBank({
+          name: str(inv.bank_name),
+          account: str(inv.bank_account),
+          branch: str(inv.bank_branch),
+          ifsc: str(inv.bank_ifsc),
+        });
+        setSaveBankDefault(false);
+        setSellerGaps([]);
+        setCustomer({
+          ...emptyCustomer,
+          contact_id: str(inv.customer_contact_id),
+          company_id: str(inv.customer_company_id),
+          name: str(inv.customer_name),
+          email: str(inv.customer_email),
+          phone: str(inv.customer_phone),
+          company: str(inv.customer_company),
+          gstin: str(inv.customer_gstin),
+          pan: str(inv.customer_pan),
+          address: str(inv.customer_address),
+        });
+        setExtraRecipients(str(inv.extra_recipients));
+        setRef(str(inv.ref));
+        setPaymentTerms(str(inv.payment_terms));
+        setDeliveryTerms(str(inv.delivery_terms));
+        setNotes(str(inv.notes));
+        setTerms(str(inv.terms));
+        setDeclaration(str(inv.declaration));
+        setSignatoryName(str(inv.signatory_name));
+        const rows: any[] = Array.isArray(json.items) ? json.items : [];
+        setItems(
+          rows.length
+            ? rows.map((it) => ({
+                part_no: str(it.part_no),
+                description: str(it.description),
+                hsn: str(it.hsn),
+                quantity: String(num(it.quantity, 1)),
+                unit_price: String(num(it.unit_price, 0)),
+              }))
+            : [blankItem()]
+        );
+      } catch (e: any) {
+        setEditError(e?.message || "Could not load the invoice");
+      } finally {
+        setEditLoaded(true);
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -187,6 +294,8 @@ export default function NewInvoice() {
     setCompanyId(c.id);
     setSeller(companySellerFields(c));
     setBank(companyBankFields(c));
+    setDeclaration(c.declaration || "");
+    setSignatoryName(c.signatory_name || "");
     // Nothing saved to fall back on yet: offer to keep whatever is typed here,
     // so this is the last invoice that needs it typed at all.
     setSaveBankDefault(!hasBankDetails(c));
@@ -210,6 +319,8 @@ export default function NewInvoice() {
         const json = await res.json().catch(() => ({}));
         const list: CompanyProfile[] = Array.isArray(json?.data) ? json.data : [];
         setCompanies(list);
+        // Editing: the invoice's own saved details fill the form, not a company's.
+        if (editIdFromUrl()) return;
         // Nothing saved means the "Your company" block below starts empty, and
         // an invoice sent that way has a blank "Communication Address". Say so
         // up front rather than after it has gone out.
@@ -435,6 +546,8 @@ export default function NewInvoice() {
       save_bank_default: saveBankDefault,
       notes: notes || null,
       terms: terms || null,
+      declaration: declaration.trim() || null,
+      signatory_name: signatoryName.trim() || null,
       items: items.map((it) => ({
         part_no: it.part_no || null,
         description: it.description,
@@ -443,6 +556,27 @@ export default function NewInvoice() {
         unit_price: num(it.unit_price, 0),
       })),
     };
+  }
+
+  /** Save the edits to an existing invoice. Same checks as creating one. */
+  async function updateInvoice(): Promise<{ id: string; invoice_number: string } | null> {
+    if (!customer.name && !customer.company) {
+      toast({ title: "Check the form", description: "Enter a customer name or company.", variant: "destructive" });
+      return null;
+    }
+    if (!items.some((it) => it.description.trim())) {
+      toast({ title: "Check the form", description: "Add at least one line item.", variant: "destructive" });
+      return null;
+    }
+    const res = await fetch(`/api/invoices/${encodeURIComponent(editId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(buildManualPayload()),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.error || "Could not save the changes");
+    return { id: editId, invoice_number: json?.invoice?.invoice_number || invoiceNumber };
   }
 
   async function createInvoice(): Promise<{ id: string; invoice_number: string } | null> {
@@ -512,8 +646,16 @@ export default function NewInvoice() {
       toast({ title: "Nothing to preview", description: "Add at least one line item.", variant: "destructive" });
       return;
     }
-    // Open the tab synchronously (before the await) so popup blockers allow it.
-    const win = window.open("", "_blank");
+    // The preview opens beside the form and follows every edit, so the form
+    // stays editable while the PDF is on screen.
+    setPreviewOpen(true);
+    renderPreview();
+  }
+
+  /** Render the current form to PDF for the preview panel. Stale renders are dropped. */
+  async function renderPreview() {
+    if (!items.some((it) => it.description.trim())) return;
+    const seq = ++previewSeq.current;
     setPreviewing(true);
     try {
       const res = await fetch("/api/invoices/preview", {
@@ -527,13 +669,19 @@ export default function NewInvoice() {
         throw new Error(j?.error || "Preview failed");
       }
       const url = URL.createObjectURL(await res.blob());
-      if (win) win.location.href = url;
-      else window.open(url, "_blank");
+      if (seq !== previewSeq.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      setPreviewErr(null);
+      setPreviewUrl((old) => {
+        if (old) URL.revokeObjectURL(old);
+        return url;
+      });
     } catch (e: any) {
-      if (win) win.close();
-      toast({ title: "Preview failed", description: e?.message || String(e), variant: "destructive" });
+      if (seq === previewSeq.current) setPreviewErr(e?.message || String(e));
     } finally {
-      setPreviewing(false);
+      if (seq === previewSeq.current) setPreviewing(false);
     }
   }
 
@@ -548,11 +696,15 @@ export default function NewInvoice() {
     }
     setSaving(true);
     try {
-      const created = await createInvoice();
+      const created = editId ? await updateInvoice() : await createInvoice();
       if (!created) return;
 
       if (!thenSend) {
-        toast({ title: "Draft saved", description: `Proforma Invoice ${created.invoice_number} created.` });
+        toast(
+          editId
+            ? { title: "Changes saved", description: `Proforma Invoice ${created.invoice_number} updated.` }
+            : { title: "Draft saved", description: `Proforma Invoice ${created.invoice_number} created.` }
+        );
         router.push("/portal/invoices");
         return;
       }
@@ -585,6 +737,24 @@ export default function NewInvoice() {
       setSaving(false);
     }
   }
+
+  /** Saving is off while the invoice loads, can't be loaded, or is locked by an order. */
+  const editBlocked = !!editId && (!editLoaded || !!editError || !!lockedBy);
+
+  // Re-render the open preview shortly after the form stops changing.
+  const previewKey = previewOpen && mode === "manual" ? JSON.stringify(buildManualPayload()) : "";
+  useEffect(() => {
+    if (!previewKey) return;
+    const t = setTimeout(() => renderPreview(), 700);
+    return () => clearTimeout(t);
+    // renderPreview reads the same state previewKey is built from.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewKey]);
+
+  // Editing: point the company picker at the saved company the invoice names.
+  useEffect(() => {
+    if (editId && !companyId && matchedCompany) setCompanyId(matchedCompany.id);
+  }, [editId, companyId, matchedCompany]);
 
   const TabButton = ({ value, icon: Icon, label }: { value: "manual" | "upload"; icon: any; label: string }) => (
     <button
@@ -1030,21 +1200,25 @@ export default function NewInvoice() {
 
   return (
     <AuthGuard>
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className={`p-6 mx-auto ${previewOpen && mode === "manual" ? "max-w-[1700px]" : "max-w-5xl"}`}>
         <button onClick={() => router.push("/portal/invoices")} className="flex items-center gap-2 text-sm text-gray-400 hover:text-white mb-4">
           <ArrowLeft className="w-4 h-4" /> Back to proforma invoices
         </button>
 
         <SectionHeader
-          title="New Proforma Invoice"
-          description="Build one from line items, or upload a ready-made proforma invoice PDF."
+          title={editId ? `Edit Proforma Invoice${invoiceNumber ? ` ${invoiceNumber}` : ""}` : "New Proforma Invoice"}
+          description={
+            editId
+              ? "Change anything below — the preview follows your edits, and saving updates the invoice."
+              : "Build one from line items, or upload a ready-made proforma invoice PDF."
+          }
         >
           {null}
         </SectionHeader>
 
         <div className="flex items-center gap-2 mb-6">
           <TabButton value="manual" icon={FileText} label="Manual (generate PDF)" />
-          <TabButton value="upload" icon={Upload} label="Upload PDF" />
+          {!editId && <TabButton value="upload" icon={Upload} label="Upload PDF" />}
           <a
             href="/portal/invoices/settings"
             className="ml-auto text-xs text-gray-400 hover:text-emerald-400 underline"
@@ -1052,6 +1226,18 @@ export default function NewInvoice() {
             Edit seller / bank / logo settings →
           </a>
         </div>
+
+        {editId && !editLoaded && (
+          <div className="mb-6 rounded-lg border border-gray-800 bg-gray-900 p-4 text-sm text-gray-400">Loading the invoice…</div>
+        )}
+        {editError && (
+          <div className="mb-6 rounded-lg border border-rose-800/60 bg-rose-950/40 p-4 text-sm text-rose-200">{editError}</div>
+        )}
+        {lockedBy && (
+          <div className="mb-6 rounded-lg border border-amber-800/60 bg-amber-950/40 p-4 text-sm text-amber-200">
+            This invoice was confirmed as order <b>{lockedBy}</b>, so it can no longer be changed. You can still preview it.
+          </div>
+        )}
 
         {sellerGaps.length > 0 && (
           <div className="mb-6 rounded-lg border border-amber-800/60 bg-amber-950/40 p-4 text-sm text-amber-200">
@@ -1066,7 +1252,8 @@ export default function NewInvoice() {
           </div>
         )}
 
-        <div className="space-y-6">
+        <div className={previewOpen && mode === "manual" ? "grid grid-cols-1 xl:grid-cols-2 gap-6 items-start" : ""}>
+        <div className="space-y-6 min-w-0">
           {mode === "manual" && InvoiceMetaCard}
           {mode === "manual" && SellerCard}
           {CustomerCard}
@@ -1249,14 +1436,40 @@ export default function NewInvoice() {
                       <span className="text-emerald-400 tabular-nums">{formatMoney(totals.total, currency)}</span>
                     </div>
                   </div>
-                  <p className="text-xs text-gray-500 mt-4">
-                    PAN, declaration, logo, signature &amp; seal come from your{" "}
-                    <a href="/portal/invoices/settings" className="text-emerald-400 underline">invoice settings</a>.
-                  </p>
                 </div>
               </section>
 
               {BankCard}
+
+              <section className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+                <h2 className="text-sm font-semibold text-white mb-4">Declaration &amp; signatory</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className={labelCls}>Declaration</label>
+                    <textarea
+                      className={inputCls}
+                      rows={3}
+                      value={declaration}
+                      onChange={(e) => setDeclaration(e.target.value)}
+                      placeholder="Certified that the particulars given above are true and the amount indicated represents the price actually charged…"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Leave blank to print the standard declaration.</p>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Authorised signatory name</label>
+                    <input
+                      className={inputCls}
+                      value={signatoryName}
+                      onChange={(e) => setSignatoryName(e.target.value)}
+                      placeholder="Rajesh"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  Logo, signature &amp; seal come from the company this invoice is issued as — change them in{" "}
+                  <a href="/portal/invoices/settings" className="text-emerald-400 underline">invoice settings</a>.
+                </p>
+              </section>
             </>
           ) : (
             /* Upload mode */
@@ -1330,13 +1543,40 @@ export default function NewInvoice() {
             <button onClick={preview} disabled={previewing || saving} className="flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm font-medium disabled:opacity-50">
               <Eye className="w-4 h-4" /> {previewing ? "Rendering…" : "Preview"}
             </button>
-            <button onClick={() => save(false)} disabled={saving} className="flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm font-medium disabled:opacity-50">
-              <Save className="w-4 h-4" /> Save draft
+            <button onClick={() => save(false)} disabled={saving || editBlocked} className="flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 text-gray-200 rounded-lg text-sm font-medium disabled:opacity-50">
+              <Save className="w-4 h-4" /> {editId ? "Save changes" : "Save draft"}
             </button>
-            <button onClick={() => save(true)} disabled={saving} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+            <button onClick={() => save(true)} disabled={saving || editBlocked} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium disabled:opacity-50">
               <Send className="w-4 h-4" /> {saving ? "Working…" : "Save & Send"}
             </button>
           </div>
+        </div>
+
+        {previewOpen && mode === "manual" && (
+          <aside className="xl:sticky xl:top-4 rounded-lg border border-gray-800 bg-gray-900 overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-gray-800">
+              <span className="text-sm font-semibold text-white">Live preview</span>
+              <div className="flex items-center gap-3 text-xs">
+                <span className="text-gray-500">{previewing ? "Updating…" : "Updates as you edit"}</span>
+                {previewUrl && (
+                  <a href={previewUrl} target="_blank" rel="noreferrer" className="text-emerald-400 underline">
+                    Open in new tab
+                  </a>
+                )}
+                <button onClick={() => setPreviewOpen(false)} className="text-gray-400 hover:text-white">
+                  Close
+                </button>
+              </div>
+            </div>
+            {previewErr ? (
+              <div className="p-4 text-sm text-rose-300">{previewErr}</div>
+            ) : previewUrl ? (
+              <iframe title="Proforma invoice preview" src={`${previewUrl}#navpanes=0&view=FitH`} className="w-full h-[80vh] bg-white" />
+            ) : (
+              <div className="p-4 text-sm text-gray-400">Rendering…</div>
+            )}
+          </aside>
+        )}
         </div>
 
         {billToModal !== undefined && (
