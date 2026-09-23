@@ -115,6 +115,16 @@ export function computeTotals(
 }
 
 /**
+ * Whose counter a number comes from, and whose invoices it must not repeat.
+ *
+ * Admins share their companies, so two admins invoicing as the same company
+ * must draw from one series: the counter belongs to the login that owns the
+ * company (counterUserId), and a number is skipped if any of the logins that
+ * share it (ownerIds) already used it. Without a scope, both are the user.
+ */
+export type InvoiceNumberScope = { counterUserId?: string | null; ownerIds?: string[] };
+
+/**
  * Allocate the next invoice number for this user+year, e.g. "PI-2026-0001".
  * MUST run inside an open transaction on `conn` — it locks the seq row with
  * FOR UPDATE so concurrent creates can't grab the same number.
@@ -123,8 +133,11 @@ export async function nextInvoiceNumber(
   conn: PoolConnection,
   userId: string,
   year: number,
-  prefix?: string | null
+  prefix?: string | null,
+  scope: InvoiceNumberScope = {}
 ): Promise<string> {
+  const counterUser = scope.counterUserId || userId;
+  const owners = scope.ownerIds?.length ? scope.ownerIds : [userId];
   // The counter runs per prefix, so a user invoicing as two companies gets an
   // unbroken series for each instead of one shared series with gaps in both.
   const clean = (prefix || "").trim().replace(/[\/]+$/, "");
@@ -140,11 +153,11 @@ export async function nextInvoiceNumber(
     `INSERT INTO proforma_invoice_seq (user_id, prefix_key, yr, last_seq)
        VALUES (?, ?, ?, 0)
      ON DUPLICATE KEY UPDATE user_id = user_id`,
-    [userId, prefixKey, year]
+    [counterUser, prefixKey, year]
   );
   const [rows] = await conn.execute(
     "SELECT last_seq FROM proforma_invoice_seq WHERE user_id = ? AND prefix_key = ? AND yr = ? FOR UPDATE",
-    [userId, prefixKey, year]
+    [counterUser, prefixKey, year]
   );
   const last = Number((rows as any[])[0]?.last_seq || 0);
 
@@ -157,16 +170,16 @@ export async function nextInvoiceNumber(
   for (let i = 0; i < 200; i++) {
     next += 1;
     number = format(next);
-    const [taken] = await conn.execute(
-      "SELECT 1 FROM proforma_invoices WHERE user_id = ? AND invoice_number = ? LIMIT 1",
-      [userId, number]
+    const [taken] = await conn.query(
+      "SELECT 1 FROM proforma_invoices WHERE user_id IN (?) AND invoice_number = ? LIMIT 1",
+      [owners, number]
     );
     if (!(taken as any[]).length) break;
   }
 
   await conn.execute(
     "UPDATE proforma_invoice_seq SET last_seq = ? WHERE user_id = ? AND prefix_key = ? AND yr = ?",
-    [next, userId, prefixKey, year]
+    [next, counterUser, prefixKey, year]
   );
   return number;
 }
@@ -181,27 +194,30 @@ export async function nextInvoiceNumber(
  * into the client, so it takes the connection rather than importing it.
  */
 export async function peekNextInvoiceNumber(
-  conn: Pick<PoolConnection, "execute">,
+  conn: Pick<PoolConnection, "execute" | "query">,
   userId: string,
   year: number,
-  prefix?: string | null
+  prefix?: string | null,
+  scope: InvoiceNumberScope = {}
 ): Promise<string> {
+  const counterUser = scope.counterUserId || userId;
+  const owners = scope.ownerIds?.length ? scope.ownerIds : [userId];
   const clean = (prefix || "").trim().replace(/[\/]+$/, "");
   const format = (n: number) =>
     clean ? `${clean}/${year}/${String(n).padStart(2, "0")}` : `PI-${year}-${String(n).padStart(4, "0")}`;
 
   const [rows] = await conn.execute(
     "SELECT last_seq FROM proforma_invoice_seq WHERE user_id = ? AND prefix_key = ? AND yr = ?",
-    [userId, clean.slice(0, 64), year]
+    [counterUser, clean.slice(0, 64), year]
   );
   let next = Number((rows as any[])[0]?.last_seq || 0);
   let number = format(next + 1);
   for (let i = 0; i < 200; i++) {
     next += 1;
     number = format(next);
-    const [taken] = await conn.execute(
-      "SELECT 1 FROM proforma_invoices WHERE user_id = ? AND invoice_number = ? LIMIT 1",
-      [userId, number]
+    const [taken] = await conn.query(
+      "SELECT 1 FROM proforma_invoices WHERE user_id IN (?) AND invoice_number = ? LIMIT 1",
+      [owners, number]
     );
     if (!(taken as any[]).length) break;
   }

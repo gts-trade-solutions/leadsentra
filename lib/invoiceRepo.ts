@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { num } from "./invoices";
 import { readPublicFile } from "./invoiceUpload";
+import { getDefaultCompanyProfile } from "./companyProfilesRepo";
 import type { InvoicePdfData, InvoicePdfAssets } from "./invoicePdf";
 
 /**
@@ -181,7 +182,8 @@ async function fillSellerBlanks(userId: string, invoice: InvoiceRecord): Promise
     }
   };
   const [settings, profile] = await Promise.all([
-    readOne("SELECT * FROM invoice_settings WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1"),
+    // The default company this user can reach — for an admin, the shared one.
+    getDefaultCompanyProfile(userId).catch(() => null) as Promise<any>,
     readOne(
       "SELECT full_name, email, phone, company, gstin, address FROM billing_profiles WHERE user_id = ? LIMIT 1"
     ),

@@ -1,17 +1,24 @@
 import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
-import { COMPANY_TEXT_FIELDS, findCompanyByName, type CompanyProfile } from "./companyProfiles";
+import { COMPANY_TEXT_FIELDS, companyNameKey, findCompanyByName, type CompanyProfile } from "./companyProfiles";
+import { isAdmin } from "./roles";
 
 /**
  * DB access for company profiles (rows of invoice_settings).
  *
- * Ordering is always "default first, then oldest": every read that used to
- * take a user's single settings row now takes their default company, which
- * for a user with one company is the very same row.
+ * Admins share their companies: an admin sees, uses and edits every company
+ * any admin has saved, so a company set up once (Race Innovations, say) is
+ * there for all of them. Anyone else sees only their own. A row still belongs
+ * to the login that saved it (user_id); the sharing is in what each viewer can
+ * reach — see companyOwners().
+ *
+ * Ordering is "default first, then the viewer's own, then oldest": every read
+ * that used to take a user's single settings row now takes their default
+ * company, which for a user with one company is the very same row.
  */
 
-const ORDER = "ORDER BY is_default DESC, created_at ASC, id ASC";
+const ORDER = "ORDER BY is_default DESC, (user_id = ?) DESC, created_at ASC, id ASC";
 
 function s(v: unknown, max = 4000): string | null {
   if (v === undefined || v === null) return null;
@@ -19,29 +26,54 @@ function s(v: unknown, max = 4000): string | null {
   return t ? t.slice(0, max) : null;
 }
 
+/**
+ * The logins whose companies this user can reach: every admin's, for an
+ * admin; otherwise just their own. The user is always included, so a
+ * demoted admin still sees what they saved.
+ */
+export async function companyOwners(userId: string): Promise<string[]> {
+  const [me] = await db.execute("SELECT role FROM users WHERE id = ? LIMIT 1", [userId]);
+  if (!isAdmin((me as any[])[0]?.role)) return [userId];
+  const [rows] = await db.execute("SELECT id FROM users WHERE role IN ('admin', 'super_admin')");
+  return Array.from(new Set([userId, ...(rows as any[]).map((r) => String(r.id))]));
+}
+
+/**
+ * Two admins who each saved the same company (by name, punctuation and case
+ * aside) would otherwise both see it twice. The first in ORDER wins — the
+ * default, else the viewer's own. Unnamed rows are never merged.
+ */
+function dedupeByName(rows: CompanyProfile[]): CompanyProfile[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => {
+    const key = companyNameKey(r.seller_company || r.label) || `id:${r.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function listCompanyProfiles(userId: string): Promise<CompanyProfile[]> {
-  const [rows] = await db.execute(
-    `SELECT * FROM invoice_settings WHERE user_id = ? ${ORDER} LIMIT 100`,
-    [userId]
+  const owners = await companyOwners(userId);
+  const [rows] = await db.query(
+    `SELECT * FROM invoice_settings WHERE user_id IN (?) ${ORDER} LIMIT 200`,
+    [owners, userId]
   );
-  return rows as CompanyProfile[];
+  return dedupeByName(rows as CompanyProfile[]).slice(0, 100);
 }
 
 export async function getCompanyProfile(userId: string, id: string): Promise<CompanyProfile | null> {
-  const [rows] = await db.execute(
-    "SELECT * FROM invoice_settings WHERE user_id = ? AND id = ? LIMIT 1",
-    [userId, id]
+  const owners = await companyOwners(userId);
+  const [rows] = await db.query(
+    "SELECT * FROM invoice_settings WHERE user_id IN (?) AND id = ? LIMIT 1",
+    [owners, id]
   );
   return ((rows as CompanyProfile[])[0] as CompanyProfile) || null;
 }
 
 /** The company used when an invoice doesn't name one (and by offers). */
 export async function getDefaultCompanyProfile(userId: string): Promise<CompanyProfile | null> {
-  const [rows] = await db.execute(
-    `SELECT * FROM invoice_settings WHERE user_id = ? ${ORDER} LIMIT 1`,
-    [userId]
-  );
-  return ((rows as CompanyProfile[])[0] as CompanyProfile) || null;
+  return (await listCompanyProfiles(userId))[0] || null;
 }
 
 /**
@@ -190,35 +222,40 @@ export async function updateCompanyProfile(
     params.push(write.seal_path);
   }
   if (sets.length) {
-    await db.execute(
-      `UPDATE invoice_settings SET ${sets.join(", ")} WHERE user_id = ? AND id = ?`,
-      [...params, userId, id]
-    );
+    // `existing` was found within this user's reach; the row itself may be
+    // another admin's, so it is addressed by its id alone.
+    await db.execute(`UPDATE invoice_settings SET ${sets.join(", ")} WHERE id = ?`, [...params, existing.id]);
   }
   return (await getCompanyProfile(userId, id)) as CompanyProfile;
 }
 
-/** Exactly one default per user — setting one clears the rest in the same statement. */
+/**
+ * Exactly one default across everything this user can reach — setting one
+ * clears the rest in the same statement. For admins that is one shared
+ * default, so every admin's invoice form opens on the same company.
+ */
 export async function setDefaultCompanyProfile(userId: string, id: string): Promise<void> {
   const found = await getCompanyProfile(userId, id);
   if (!found) throw new HttpError(404, "Company not found.");
-  await db.execute("UPDATE invoice_settings SET is_default = (id = ?) WHERE user_id = ?", [id, userId]);
+  const owners = await companyOwners(userId);
+  await db.query("UPDATE invoice_settings SET is_default = (id = ?) WHERE user_id IN (?)", [id, owners]);
 }
 
 /**
  * Invoices already issued keep their own snapshot of the seller, so deleting a
  * company changes nothing that has gone out. If the default is deleted the
- * oldest remaining company takes over, so a user is never left with companies
- * but no default.
+ * oldest remaining company takes over, so nobody is left with companies but
+ * no default.
  */
 export async function deleteCompanyProfile(userId: string, id: string): Promise<boolean> {
   const existing = await getCompanyProfile(userId, id);
   if (!existing) return false;
-  await db.execute("DELETE FROM invoice_settings WHERE user_id = ? AND id = ?", [userId, id]);
+  await db.execute("DELETE FROM invoice_settings WHERE id = ?", [existing.id]);
   if (existing.is_default) {
-    await db.execute(
-      "UPDATE invoice_settings SET is_default = 1 WHERE user_id = ? ORDER BY created_at ASC LIMIT 1",
-      [userId]
+    const owners = await companyOwners(userId);
+    await db.query(
+      "UPDATE invoice_settings SET is_default = 1 WHERE user_id IN (?) ORDER BY created_at ASC LIMIT 1",
+      [owners]
     );
   }
   return true;
@@ -243,8 +280,8 @@ export async function rememberBankDetails(
       await db.execute(
         `UPDATE invoice_settings
             SET bank_name = ?, bank_account = ?, bank_branch = ?, bank_ifsc = ?
-          WHERE user_id = ? AND id = ?`,
-        [bank.name, bank.account, bank.branch, bank.ifsc, userId, target.id]
+          WHERE id = ?`,
+        [bank.name, bank.account, bank.branch, bank.ifsc, target.id]
       );
       return;
     }

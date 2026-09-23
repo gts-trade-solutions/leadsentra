@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/auth";
+import { getDefaultCompanyProfile } from "@/lib/companyProfilesRepo";
 import { num, money } from "@/lib/invoices";
 import { normalizeRoutes, nextOfferNumber, OFFER_DEFAULTS } from "@/lib/offers";
 
@@ -69,11 +70,8 @@ export async function POST(req: Request) {
   }
 
   // Optional seller offer-number prefix.
-  const [settingsRows] = await db.execute(
-    "SELECT offer_prefix, invoice_prefix FROM invoice_settings WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1",
-    [session.id]
-  );
-  const settings = (settingsRows as any[])[0] || null;
+  // The default company this user can reach — for an admin, the shared one.
+  const settings: any = await getDefaultCompanyProfile(session.id);
 
   const issueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.issue_date || ""))
     ? String(body.issue_date)

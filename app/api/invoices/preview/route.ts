@@ -4,7 +4,7 @@ import { getUser } from "@/lib/auth";
 import { normalizeItems, computeTotals, num, peekNextInvoiceNumber } from "@/lib/invoices";
 import { generateInvoicePdf, type InvoicePdfData } from "@/lib/invoicePdf";
 import { readPublicFile } from "@/lib/invoiceUpload";
-import { resolveSellerProfile } from "@/lib/companyProfilesRepo";
+import { companyOwners, resolveSellerProfile } from "@/lib/companyProfilesRepo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,7 +69,10 @@ export async function POST(req: Request) {
   // rather than failing the preview.
   const previewNumber =
     s(body.invoice_number, 64) ||
-    (await peekNextInvoiceNumber(db, session.id, year, prefix).catch(() =>
+    (await peekNextInvoiceNumber(db, session.id, year, prefix, {
+      counterUserId: settings?.user_id,
+      ownerIds: await companyOwners(session.id).catch(() => [session.id]),
+    }).catch(() =>
       prefix ? `${prefix}/${year}/##` : `PI-${year}-####`
     ));
 

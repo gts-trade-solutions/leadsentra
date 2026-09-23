@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { num } from "./invoices";
 import { readPublicFile } from "./invoiceUpload";
+import { getDefaultCompanyProfile } from "./companyProfilesRepo";
 import type { OfferPdfData, OfferPdfAssets } from "./offerPdf";
 
 /**
@@ -139,11 +140,12 @@ export type SellerIdentity = {
 
 /** Read the seller identity from invoice_settings (+ billing profile fallback). */
 export async function loadSellerIdentity(userId: string): Promise<SellerIdentity> {
-  const [settingsRows, profileRows] = await Promise.all([
-    db.execute("SELECT * FROM invoice_settings WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, id ASC LIMIT 1", [userId]),
+  const [settings, profileRows] = await Promise.all([
+    // The default company this user can reach — for an admin, the shared one.
+    getDefaultCompanyProfile(userId),
     db.execute("SELECT company, email, phone, address FROM billing_profiles WHERE user_id = ? LIMIT 1", [userId]),
   ]);
-  const s = (settingsRows[0] as any[])[0] || null;
+  const s: any = settings;
   const p = (profileRows[0] as any[])[0] || null;
   // The settings email field may hold two addresses separated by a comma/newline.
   const emails = String(s?.email || p?.email || "")

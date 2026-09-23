@@ -5,7 +5,7 @@ import { getUser } from "@/lib/auth";
 import { nextInvoiceNumber, num, parseRecipients, MAX_INVOICE_RECIPIENTS } from "@/lib/invoices";
 import { saveInvoiceFile } from "@/lib/invoiceUpload";
 import { recordInvoiceBillTo } from "@/lib/billToRepo";
-import { resolveCompanyProfile } from "@/lib/companyProfilesRepo";
+import { companyOwners, resolveCompanyProfile } from "@/lib/companyProfilesRepo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -73,7 +73,11 @@ export async function POST(req: Request) {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-    const invoiceNumber = await nextInvoiceNumber(conn, session.id, year, settings?.invoice_prefix);
+    const invoiceNumber = await nextInvoiceNumber(conn, session.id, year, settings?.invoice_prefix, {
+      // A company admins share draws from one series, whoever raises it.
+      counterUserId: settings?.user_id,
+      ownerIds: await companyOwners(session.id),
+    });
 
     await conn.execute(
       `INSERT INTO proforma_invoices

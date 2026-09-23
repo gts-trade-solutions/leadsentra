@@ -33,6 +33,8 @@ export type CompanyTextField = (typeof COMPANY_TEXT_FIELDS)[number];
 
 export type CompanyProfile = Record<CompanyTextField, string | null> & {
   id: string;
+  /** The login that saved it. Admins share their companies, so it may not be the viewer. */
+  user_id?: string;
   is_default: number;
   logo_path: string | null;
   signature_path: string | null;

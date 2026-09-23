@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { db } from "./db";
 import { HttpError } from "./auth";
 import { recordInvoiceBillTo } from "./billToRepo";
-import { resolveSellerProfile, rememberBankDetails } from "./companyProfilesRepo";
+import { companyOwners, resolveSellerProfile, rememberBankDetails } from "./companyProfilesRepo";
 import {
   normalizeItems,
   computeTotals,
@@ -139,7 +139,12 @@ export async function createProformaInvoice(
     await conn.beginTransaction();
 
     const invoiceNumber =
-      manualNumber || (await nextInvoiceNumber(conn, userId, year, settings?.invoice_prefix));
+      manualNumber ||
+      (await nextInvoiceNumber(conn, userId, year, settings?.invoice_prefix, {
+        // A company admins share draws from one series, whoever raises it.
+        counterUserId: settings?.user_id,
+        ownerIds: await companyOwners(userId),
+      }));
 
     await conn.execute(
       `INSERT INTO proforma_invoices
